@@ -19,7 +19,10 @@ from reportlab.pdfgen import canvas
 import qrcode
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from core import TZ, calculate_discount, calculate_fees, classify_package, pix_payload, valid_cpf, validate_surcharge
+from core import (
+    TZ, calculate_discount, calculate_fees, classify_package, package_arrival_message,
+    pix_payload, valid_cpf, validate_surcharge,
+)
 
 ROOT = Path(__file__).parent
 TERMS_VERSION = "MINUTA-TESTE-v1"
@@ -109,6 +112,13 @@ def create_app(test_config=None):
     )
     if test_config:
         app.config.update(test_config)
+
+    @app.template_filter("package_arrival_message")
+    def package_arrival_message_filter(package):
+        return package_arrival_message(
+            package["client_name"], package["public_id"],
+            package["tracking"], package["base_price"],
+        )
 
     def db():
         if "db" not in request.environ:
@@ -950,6 +960,10 @@ def build_receipt_pdf(withdrawal, packages):
     pdf.setFont("Helvetica-Bold", 16)
     pdf.drawString(45, height - 50, "PONTO DE COLETA ADELINHA")
     pdf.setFont("Helvetica", 9)
+    discount_input = display(withdrawal["discount_input"])
+    if withdrawal["discount_input"] is not None:
+        discount_input = (f"{float(withdrawal['discount_input']):.2f}%" if withdrawal["discount_type"] == "porcentagem"
+                          else display(withdrawal["discount_input"], True))
     lines = [
         "CNPJ: 38.145.273/0001-05",
         ADDRESS,
@@ -964,10 +978,19 @@ def build_receipt_pdf(withdrawal, packages):
         f"Valor do serviço: {display(withdrawal['service_amount'], True)}",
         f"Dias de atraso: {display(withdrawal['late_days'])}",
         f"Taxa extra: {display(withdrawal['late_amount'], True)}",
+        f"Valor deste pacote antes do desconto: {display(withdrawal['total_amount'], True)}",
         f"Acréscimo manual: {display(withdrawal['surcharge_amount'], True)}",
         f"Motivo do acréscimo: {display(withdrawal['surcharge_reason'])}",
+        f"Acréscimo aplicado por: {display(withdrawal['surcharge_applied_by'])}",
+        f"Total original da retirada: {display(withdrawal['original_total'], True)}",
+        f"Modalidade do desconto: {withdrawal['discount_type'] or ('Sem desconto' if withdrawal['original_total'] is not None else 'Não registrado')}",
+        f"Valor/percentual informado: {discount_input}",
+        f"Desconto calculado: {display(withdrawal['discount_amount'], True)}",
         f"Total final pago: {display(withdrawal['final_total'] if withdrawal['final_total'] is not None else withdrawal['total_paid'], True)}",
+        f"Desconto autorizado por: {display(withdrawal['discount_applied_by'])}",
         f"Forma de pagamento: {display(withdrawal['payment_method'])}",
+        f"Pagamento confirmado: {format_local(withdrawal['payment_confirmed_at'])}",
+        f"Atendente: {display(withdrawal['payment_confirmed_by'] or withdrawal['staff'])}",
     ]
     y = height - 72
     for line in lines:

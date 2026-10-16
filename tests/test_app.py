@@ -1,5 +1,8 @@
 import sqlite3
+import html
+import re
 from datetime import date
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -239,6 +242,23 @@ def test_dashboard_renders_one_package_section_and_one_package_card(client):
     assert response.text.count("<h2>Pacotes</h2>") == 1
     # O ID aparece no cartão e no link/URL, mas existe somente um article do pacote.
     assert response.text.count('<article class="package">') == 1
+
+
+def test_whatsapp_arrival_action_uses_encoded_complete_message(client):
+    register(client, name="Maria da Silva")
+    login(client)
+    client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10,
+        "weight": 1, "shelf": "A1", "tracking": "BR001234", "csrf_token": token(client)})
+
+    page = client.get("/painel").text
+    href = re.search(r'href="(https://wa\.me/[^\"]+)"[^>]*>Avisar</a>', page)
+    assert href is not None
+    message = parse_qs(urlparse(html.unescape(href.group(1))).query)["text"][0]
+    assert message.startswith("Olá, Maria da Silva! 😊\n\nSeu pacote PCT-000001, com rastreio BR001234")
+    assert "armazenamento é de R$ 5,00" in message
+    assert "4 dias corridos" in message
+    assert "A partir do 5º dia" in message
+    assert message.endswith("Agradecemos pela compreensão!")
 
 
 def test_dashboard_package_listing_is_paginated(app, client):

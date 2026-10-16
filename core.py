@@ -25,6 +25,19 @@ def valid_cpf(value):
     return True
 
 
+def package_arrival_message(client_name, package_id, tracking, service_value):
+    """Monta o aviso de chegada com quebras de linha e moeda brasileira."""
+    formatted_value = f"R$ {float(service_value):.2f}".replace(".", ",")
+    return (
+        f"Olá, {client_name}! 😊\n\n"
+        f"Seu pacote {package_id}, com rastreio {tracking}, chegou ao Ponto de Coleta Adelinha!\n\n"
+        f"O valor do serviço de armazenamento é de {formatted_value}. Você tem 4 dias corridos para "
+        "retirar, contando hoje como o primeiro dia.\n\n"
+        "A partir do 5º dia, será cobrada uma taxa adicional de R$ 0,50 por dia, por pacote, até a retirada.\n\n"
+        "Agradecemos pela compreensão!"
+    )
+
+
 def calculate_discount(total, amount_text="", percent_text=""):
     """Valida uma modalidade de desconto e calcula totais com duas casas."""
     amount_text, percent_text = str(amount_text).strip(), str(percent_text).strip()

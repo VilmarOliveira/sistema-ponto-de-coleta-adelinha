@@ -2,7 +2,10 @@ from datetime import date
 
 import pytest
 
-from core import calculate_discount, calculate_fees, classify_package, pix_payload, valid_cpf, validate_surcharge
+from core import (
+    calculate_discount, calculate_fees, classify_package, package_arrival_message,
+    pix_payload, valid_cpf, validate_surcharge,
+)
 
 
 def test_pix_limits_long_holder_name_to_emv_standard():
@@ -19,6 +22,19 @@ def test_valid_cpf_accepts_plain_or_formatted_value(cpf):
 @pytest.mark.parametrize("cpf", ["", "123", "11111111111", "52998224724", "abc"])
 def test_valid_cpf_rejects_bad_length_repeated_and_wrong_check_digits(cpf):
     assert not valid_cpf(cpf)
+
+
+def test_package_arrival_message_preserves_lines_accents_and_brazilian_value():
+    message = package_arrival_message("Maria da Silva", "PCT-000123", "BR001234", 5)
+    assert message == (
+        "Olá, Maria da Silva! 😊\n\n"
+        "Seu pacote PCT-000123, com rastreio BR001234, chegou ao Ponto de Coleta Adelinha!\n\n"
+        "O valor do serviço de armazenamento é de R$ 5,00. Você tem 4 dias corridos para retirar, "
+        "contando hoje como o primeiro dia.\n\n"
+        "A partir do 5º dia, será cobrada uma taxa adicional de R$ 0,50 por dia, por pacote, até a retirada.\n\n"
+        "Agradecemos pela compreensão!"
+    )
+    assert "R$ 10,00" in package_arrival_message("João", "PCT-2", "00001", 10)
 
 
 def test_discount_by_value_and_percentage_rounds_to_two_decimals():
