@@ -5,3 +5,4 @@ select,textarea{display:block;width:100%;margin-top:7px;border:1px solid #d5cec5
 .has-errors input,.has-errors select{border-color:#b52b1c;background:#fff8f6}
 .cep-status{align-self:center;color:var(--muted);font-size:14px;padding-top:20px}.cep-status.loading{color:#8b6200}.cep-status.success{color:var(--green)}.cep-status.error{color:#9a2416}
 @media(max-width:750px){header{flex-wrap:wrap}.brand{margin-bottom:8px}body{overflow-x:hidden}.document,.panel-card{overflow-wrap:anywhere}}
+.pagination{display:flex;align-items:center;justify-content:center;gap:14px;margin:24px auto;flex-wrap:wrap}

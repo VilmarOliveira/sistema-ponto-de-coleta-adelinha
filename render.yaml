@@ -2,7 +2,7 @@ services:
   - type: web
     name: ponto-coleta-adelinha-teste
     runtime: python
-    plan: starter
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn --bind 0.0.0.0:$PORT 'app:create_app()'
     healthCheckPath: /health
@@ -15,11 +15,7 @@ services:
         value: admin
       - key: STAFF_PASSWORD_HASH
         sync: false
-      - key: DATABASE
-        value: /var/data/adelinha.db
+      - key: DATABASE_URL
+        sync: false
       - key: COOKIE_SECURE
         value: "1"
-    disk:
-      name: adelinha-data
-      mountPath: /var/data
-      sizeGB: 1

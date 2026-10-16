@@ -1,6 +1,6 @@
 # Ponto de Coleta Adelinha — versão de teste
 
-Sistema web responsivo para cadastro público, gestão interna de pacotes, aviso manual por WhatsApp, cálculo de prazo e retirada com comprovante. Os dados ficam em SQLite no servidor, não no navegador.
+Sistema web responsivo para cadastro público, gestão interna de pacotes, aviso manual por WhatsApp, cálculo de prazo e retirada com comprovante. Em produção, os dados ficam no PostgreSQL do Neon; SQLite é usado somente nos testes e na execução local.
 
 ## Link da prévia
 
@@ -58,12 +58,22 @@ Defina variáveis de ambiente antes de iniciar:
 export SECRET_KEY="gere-uma-chave-longa-e-aleatoria"
 export STAFF_USER="usuario-da-equipe"
 export STAFF_PASSWORD_HASH="$(python -c 'from werkzeug.security import generate_password_hash; print(generate_password_hash("SENHA-FORTE-AQUI"))')"
-export DATABASE="/caminho/persistente/adelinha.db"
+export DATABASE_URL="postgresql://USUARIO:SENHA@HOST/BASE?sslmode=require"
 export PORT=5000
 export COOKIE_SECURE=1
 ```
 
-Execute atrás de HTTPS com um servidor WSGI, por exemplo `gunicorn 'app:create_app()'`. Faça backup frequente do arquivo configurado em `DATABASE`. Para mais de um processo/servidor ou crescimento do uso, migre SQLite para PostgreSQL.
+Copie a conexão no painel do Neon e cadastre-a como segredo `DATABASE_URL`; nunca coloque a URL ou a senha no código, GitHub ou `render.yaml`. Execute atrás de HTTPS com um servidor WSGI, por exemplo `gunicorn 'app:create_app()'`. A inicialização cria somente tabelas e colunas ausentes e não apaga registros. Configure backups no Neon.
+
+### Migrar o SQLite existente para o Neon
+
+1. Pare o sistema e faça uma cópia de `data\adelinha.db`.
+2. Crie um projeto/banco vazio no Neon.
+3. Defina `DATABASE_URL` apenas no terminal ou como segredo do serviço.
+4. Execute `python scripts/migrate_sqlite_to_postgres.py data/adelinha.db`.
+5. Confira as quantidades e alguns cadastros no Neon antes de apontar o Render para a nova conexão.
+
+O script copia somente colunas existentes, respeita a ordem das chaves estrangeiras, não remove dados e não sobrescreve chaves que já existam no PostgreSQL. Guarde o SQLite original até validar completamente a migração.
 
 ## 2. Salvar suas alterações no GitHub
 
@@ -83,7 +93,7 @@ Não envie o arquivo `data/adelinha.db`: ele contém dados pessoais e já está 
 
 ## 3. Abrir uma versão de teste na internet
 
-O projeto inclui `render.yaml`, pronto para uma prévia no Render com HTTPS e disco persistente. Antes de começar, gere o hash da sua senha:
+O projeto inclui `render.yaml`, pronto para uma prévia no plano Free do Render, sem disco. A persistência é fornecida pelo PostgreSQL do Neon. Antes de começar, gere o hash da sua senha:
 
 ```bash
 .venv/bin/python -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('COLOQUE-UMA-SENHA-FORTE-AQUI'))"
@@ -94,20 +104,21 @@ Copie toda a linha exibida. Depois:
 1. Acesse Render, entre com GitHub e escolha **New > Blueprint**.
 2. Autorize apenas o repositório privado deste projeto e selecione-o.
 3. Confirme o arquivo `render.yaml` e o serviço sugerido.
-4. Quando solicitado, cole a linha no valor de `STAFF_PASSWORD_HASH`; marque-a como secreta. Não use a senha de demonstração.
+4. Quando solicitado, cole a linha no valor de `STAFF_PASSWORD_HASH`; marque-a como secreta. Não use a senha de demonstração. Cole também a conexão do Neon em `DATABASE_URL`, como segredo.
 5. Aguarde o deploy e abra a URL terminada em `.onrender.com`. Teste `/health`, faça um cadastro fictício, registre um pacote, confirme o aviso e faça uma retirada.
-6. Verifique no painel do Render que o disco `adelinha-data` está anexado em `/var/data`. Sem disco persistente, os registros podem desaparecer em um novo deploy.
+6. Verifique `/health` e confirme no Neon que as tabelas foram criadas. O serviço não usa nem precisa de disco persistente no Render.
 
 Essa URL é uma **versão de teste**. Não cadastre CPFs ou documentos reais até concluir revisão jurídica/LGPD, backup, controle de acesso e testes operacionais. Quando estiver satisfeito, conecte um domínio em **Settings > Custom Domains** e mantenha HTTPS habilitado.
 
 ## 4. Serviços, contas e custos
 
 1. **Domínio** (opcional, recomendado): conta em um registrador, normalmente R$ 40–70/ano para `.com.br`.
-2. **Hospedagem com disco persistente e HTTPS**: Render, Railway, Fly.io, VPS ou equivalente. O `render.yaml` escolhe um plano pago porque banco e assinaturas não podem ficar em armazenamento temporário. Confira o preço atual antes de confirmar; preços mudam.
-3. **Repositório Git privado**: GitHub/GitLab possuem opções gratuitas.
-4. **Backup externo criptografado**: armazenamento em nuvem; o custo depende de retenção e volume.
-5. **WhatsApp**: nesta versão o envio é manual pelo link `wa.me`, sem API paga. Uma automação futura exigirá conta Meta Business/WhatsApp Business Platform e cobrança vigente da Meta/provedor.
-6. **Pix**: conta bancária empresarial apta a receber pela chave CNPJ. Eventuais tarifas dependem do banco.
+2. **Hospedagem HTTPS**: o `render.yaml` usa o plano Free do Render. Confira limites e preços atuais antes de publicar.
+3. **Banco PostgreSQL**: conta e projeto no Neon, com a conexão guardada somente em `DATABASE_URL`. Confira limites e preços atuais no Neon.
+4. **Repositório Git privado**: GitHub/GitLab possuem opções gratuitas.
+5. **Backup externo criptografado**: armazenamento em nuvem; o custo depende de retenção e volume.
+6. **WhatsApp**: nesta versão o envio é manual pelo link `wa.me`, sem API paga.
+7. **Pix**: conta bancária empresarial apta a receber pela chave CNPJ. Eventuais tarifas dependem do banco.
 
 Antes da produção: revise a minuta com profissional jurídico/LGPD, troque as credenciais, restrinja quem acessa o painel, configure HTTPS, backups e política de retenção, e faça teste de restauração. CPF, documentos e assinaturas nunca são mostrados na área pública; por conter dados pessoais, o banco e seus backups devem ter acesso rigorosamente limitado.
 

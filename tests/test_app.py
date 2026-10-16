@@ -241,6 +241,23 @@ def test_dashboard_renders_one_package_section_and_one_package_card(client):
     assert response.text.count('<article class="package">') == 1
 
 
+def test_dashboard_package_listing_is_paginated(app, client):
+    register(client)
+    login(client)
+    connection = sqlite3.connect(app.config["DATABASE"])
+    for number in range(1, 28):
+        connection.execute("""INSERT INTO packages(public_id,client_id,tracking,width,height,length,weight,shelf,category,
+            base_price,status,created_at) VALUES(?,1,?,10,10,10,1,'A1','Pequeno',5,'aguardando_aviso',?)""",
+            (f"PCT-{number:06d}", f"PAGE{number}", f"2026-01-{(number % 28) + 1:02d}T10:00:00-03:00"))
+    connection.commit()
+    first = client.get("/painel?page=1")
+    second = client.get("/painel?page=2")
+    assert first.text.count('<article class="package">') == 25
+    assert "Próxima" in first.text
+    assert second.text.count('<article class="package">') == 2
+    assert "Anterior" in second.text
+
+
 def test_second_pickup_shows_existing_receipt_without_new_rows(app, client):
     register(client)
     login(client)

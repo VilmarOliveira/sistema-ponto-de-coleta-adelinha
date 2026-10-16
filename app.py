@@ -28,6 +28,59 @@ PIX_RECEIVER_NAME = "AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS"
 # O CEP não é exibido aqui porque não foi confirmado para o endereço de retirada.
 PICKUP_ADDRESS = "RUA AFONSO BORGES DE FREITAS, 795, JARDIM ADELINHA, FRANCA – SP"
 ADDRESS = PICKUP_ADDRESS  # compatibilidade com comprovantes e integrações existentes
+CLIENT_COLUMNS = "id,public_id,name,cpf,phone,email,terms_version,terms_text,signature,accepted_at,active,session_version,residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement"
+PACKAGE_COLUMNS = "id,public_id,client_id,tracking,width,height,length,weight,shelf,category,base_price,status,created_at,notified_at,picked_at"
+PICKUP_COLUMNS = "id,receiver_name,receiver_document,document_type,signature,staff,picked_at,base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,discount_type,discount_input,discount_amount,original_total,final_total,discount_applied_by,surcharge_amount,surcharge_reason,surcharge_applied_by"
+PICKUP_PACKAGE_COLUMNS = "pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,tracking_code,package_category,notified_at,service_amount,late_days,total_amount"
+PACKAGE_COLUMNS_P = ",".join(f"p.{column}" for column in PACKAGE_COLUMNS.split(","))
+PICKUP_COLUMNS_PU = ",".join(f"pu.{column}" for column in PICKUP_COLUMNS.split(","))
+
+
+def is_postgres(database):
+    return str(database).startswith(("postgres://", "postgresql://"))
+
+
+class DatabaseIntegrityError(Exception):
+    pass
+
+
+class DatabaseConnection:
+    """Pequena camada de compatibilidade entre SQLite local e PostgreSQL/Neon."""
+    def __init__(self, database):
+        self.postgres = is_postgres(database)
+        if self.postgres:
+            import psycopg
+            from psycopg.rows import dict_row
+            self.connection = psycopg.connect(database, row_factory=dict_row)
+        else:
+            self.connection = sqlite3.connect(database)
+            self.connection.row_factory = sqlite3.Row
+            self.connection.execute("PRAGMA foreign_keys = ON")
+
+    def execute(self, sql, params=()):
+        if self.postgres:
+            import psycopg
+            sql = sql.replace("?", "%s")
+            try:
+                return self.connection.execute(sql, params)
+            except psycopg.IntegrityError as error:
+                raise DatabaseIntegrityError from error
+        try:
+            return self.connection.execute(sql, params)
+        except sqlite3.IntegrityError as error:
+            raise DatabaseIntegrityError from error
+
+    def begin_write(self):
+        self.execute("BEGIN" if self.postgres else "BEGIN IMMEDIATE")
+
+    def commit(self):
+        self.connection.commit()
+
+    def rollback(self):
+        self.connection.rollback()
+
+    def close(self):
+        self.connection.close()
 
 
 def terms_text():
@@ -44,7 +97,7 @@ def create_app(test_config=None):
     app = Flask(__name__)
     app.config.update(
         SECRET_KEY=os.environ.get("SECRET_KEY", secrets.token_hex(32)),
-        DATABASE=os.environ.get("DATABASE", str(ROOT / "data" / "adelinha.db")),
+        DATABASE=os.environ.get("DATABASE_URL") or os.environ.get("DATABASE", str(ROOT / "data" / "adelinha.db")),
         STAFF_USER=os.environ.get("STAFF_USER", "admin"),
         STAFF_PASSWORD_HASH=os.environ.get("STAFF_PASSWORD_HASH", generate_password_hash("adelinha-teste")),
         PASSWORD_LINK_MINUTES=30,
@@ -59,9 +112,7 @@ def create_app(test_config=None):
 
     def db():
         if "db" not in request.environ:
-            connection = sqlite3.connect(app.config["DATABASE"])
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA foreign_keys = ON")
+            connection = DatabaseConnection(app.config["DATABASE"])
             request.environ["db"] = connection
         return request.environ["db"]
 
@@ -117,6 +168,13 @@ def create_app(test_config=None):
     def package_form_data():
         return {key: request.form.get(key, "") for key in ("client_id", "client_label", "tracking", "shelf", "weight", "width", "height", "length")}
 
+    def pagination(default_size=25):
+        try:
+            page = max(1, int(request.args.get("page", 1)))
+        except ValueError:
+            page = 1
+        return page, default_size, (page - 1) * default_size
+
     def residential_address_form():
         return {key: request.form.get(key, "").strip() for key in
                 ("residential_cep", "residential_street", "residential_number",
@@ -157,7 +215,7 @@ def create_app(test_config=None):
 
     def login_blocked(kind, identifier):
         cutoff = (now() - timedelta(minutes=app.config["LOGIN_WINDOW_MINUTES"])).isoformat()
-        count = db().execute("SELECT COUNT(*) FROM login_attempts WHERE kind=? AND identifier=? AND succeeded=0 AND attempted_at>=?", (kind, identifier, cutoff)).fetchone()[0]
+        count = db().execute("SELECT COUNT(*) AS total FROM login_attempts WHERE kind=? AND identifier=? AND succeeded=0 AND attempted_at>=?", (kind, identifier, cutoff)).fetchone()["total"]
         return count >= app.config["LOGIN_LIMIT"]
 
     def record_login(kind, identifier, succeeded):
@@ -176,8 +234,8 @@ def create_app(test_config=None):
         phone_like = f"%{phone}%" if phone else like
         return db().execute(
             """SELECT id, public_id, name, phone FROM clients
-               WHERE name LIKE ? COLLATE NOCASE
-                  OR public_id LIKE ? COLLATE NOCASE
+               WHERE LOWER(name) LIKE LOWER(?)
+                  OR LOWER(public_id) LIKE LOWER(?)
                   OR phone LIKE ?
                ORDER BY name LIMIT 30""",
             (like, like, phone_like),
@@ -219,13 +277,13 @@ def create_app(test_config=None):
         cur = db().execute(
             """INSERT INTO clients(name, cpf, phone, terms_version, terms_text, signature, accepted_at, password_hash,
                residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,email)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
             (name, cpf, phone, TERMS_VERSION, terms_text(), signature, accepted_at, generate_password_hash(password),
              digits(residential["residential_cep"]), residential["residential_street"], residential["residential_number"],
              residential["residential_district"], residential["residential_city"], residential["residential_state"].upper(),
              residential["residential_complement"] or None, email or None),
         )
-        client_id = cur.lastrowid
+        client_id = cur.fetchone()["id"]
         public_id = f"ADL-{client_id:06d}"
         db().execute("UPDATE clients SET public_id=? WHERE id=?", (public_id, client_id))
         db().commit()
@@ -287,20 +345,23 @@ def create_app(test_config=None):
     @app.get("/cliente")
     @client_login_required
     def client_area():
-        client = db().execute("SELECT * FROM clients WHERE id=?", (session["client_id"],)).fetchone()
-        packages = db().execute("SELECT * FROM packages WHERE client_id=? ORDER BY created_at DESC", (client["id"],)).fetchall()
+        client = db().execute(f"SELECT {CLIENT_COLUMNS} FROM clients WHERE id=?", (session["client_id"],)).fetchone()
+        page, page_size, offset = pagination()
+        package_rows = db().execute(f"SELECT {PACKAGE_COLUMNS} FROM packages WHERE client_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?", (client["id"], page_size + 1, offset)).fetchall()
+        has_next = len(package_rows) > page_size
+        packages = package_rows[:page_size]
         pending = []
         for package in packages:
             if package["status"] != "retirado":
                 item = {**dict(package), **fees(package)}
                 item["deadline"] = (datetime.fromisoformat(package["notified_at"]).astimezone(TZ).date() + timedelta(days=3)).strftime("%d/%m/%Y") if package["notified_at"] else None
                 pending.append(item)
-        return render_template("client_area.html", client=client, pending=pending, packages=packages)
+        return render_template("client_area.html", client=client, pending=pending, packages=packages, page=page, has_next=has_next)
 
     @app.route("/cliente/editar", methods=["GET", "POST"])
     @client_login_required
     def client_edit():
-        client = db().execute("SELECT * FROM clients WHERE id=?", (session["client_id"],)).fetchone()
+        client = db().execute(f"SELECT {CLIENT_COLUMNS} FROM clients WHERE id=?", (session["client_id"],)).fetchone()
         if request.method == "GET":
             return render_template("client_edit.html", client=client)
         phone = digits(request.form.get("phone", ""))
@@ -323,13 +384,13 @@ def create_app(test_config=None):
     @app.get("/cliente/condicoes-aceitas")
     @client_login_required
     def client_accepted_terms():
-        client = db().execute("SELECT * FROM clients WHERE id=?", (session["client_id"],)).fetchone()
+        client = db().execute(f"SELECT {CLIENT_COLUMNS} FROM clients WHERE id=?", (session["client_id"],)).fetchone()
         return render_template("accepted_terms.html", client=client)
 
     @app.get("/cliente/comprovantes/<int:pickup_id>")
     @client_login_required
     def client_receipt(pickup_id):
-        pickup = db().execute("SELECT pu.* FROM pickups pu WHERE pu.id=? AND EXISTS(SELECT 1 FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=pu.id AND p.client_id=?)", (pickup_id, session["client_id"])).fetchone()
+        pickup = db().execute(f"SELECT {PICKUP_COLUMNS_PU} FROM pickups pu WHERE pu.id=? AND EXISTS(SELECT 1 FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=pu.id AND p.client_id=?)", (pickup_id, session["client_id"])).fetchone()
         if not pickup:
             abort(404)
         packages = db().execute("SELECT p.id package_id,p.public_id,pp.base_amount,pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=? AND p.client_id=?", (pickup_id, session["client_id"])).fetchall()
@@ -345,18 +406,22 @@ def create_app(test_config=None):
     def dashboard():
         query = request.args.get("q", "").strip()
         clients = find_clients(query)
-        package_rows = db().execute("""
-            SELECT p.*, c.name client_name, c.public_id client_public_id, c.phone
+        page, page_size, offset = pagination()
+        package_rows = db().execute(f"""
+            SELECT {PACKAGE_COLUMNS_P}, c.name client_name, c.public_id client_public_id, c.phone
             FROM packages p JOIN clients c ON c.id=p.client_id
             ORDER BY CASE p.status WHEN 'aguardando_aviso' THEN 0 WHEN 'aguardando_retirada' THEN 1 ELSE 2 END, p.created_at DESC
-        """).fetchall()
+            LIMIT ? OFFSET ?
+        """, (page_size + 1, offset)).fetchall()
+        has_next = len(package_rows) > page_size
+        package_rows = package_rows[:page_size]
         # Uma única coleção alimenta a única seção "Pacotes" da tela. A chave
         # também protege a interface caso uma futura consulta ganhe outro JOIN.
         packages = {package["id"]: package for package in package_rows}.values()
         rows = [{**dict(package), **fees(package)} for package in packages]
         package_form = session.pop("package_form", {})
         settings = db().execute("SELECT pix_receiver_name FROM settings WHERE id=1").fetchone()
-        return render_template("dashboard.html", clients=clients, packages=rows, q=query, pix=PIX_KEY, package_form=package_form, pix_receiver_name=settings["pix_receiver_name"])
+        return render_template("dashboard.html", clients=clients, packages=rows, q=query, pix=PIX_KEY, package_form=package_form, pix_receiver_name=settings["pix_receiver_name"], page=page, has_next=has_next)
 
     @app.get("/painel/clientes/busca")
     @login_required
@@ -367,19 +432,22 @@ def create_app(test_config=None):
     @app.get("/painel/clientes/<int:client_id>")
     @login_required
     def staff_client(client_id):
-        client = db().execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+        client = db().execute(f"SELECT {CLIENT_COLUMNS} FROM clients WHERE id=?", (client_id,)).fetchone()
         if not client:
             abort(404)
-        packages = db().execute("SELECT * FROM packages WHERE client_id=? ORDER BY created_at DESC", (client_id,)).fetchall()
-        pending_count = db().execute("SELECT COUNT(*) FROM packages WHERE client_id=? AND status!='retirado'", (client_id,)).fetchone()[0]
-        linked_count = db().execute("SELECT COUNT(*) FROM packages WHERE client_id=?", (client_id,)).fetchone()[0]
+        page, page_size, offset = pagination()
+        package_rows = db().execute(f"SELECT {PACKAGE_COLUMNS} FROM packages WHERE client_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?", (client_id, page_size + 1, offset)).fetchall()
+        has_next = len(package_rows) > page_size
+        packages = package_rows[:page_size]
+        pending_count = db().execute("SELECT COUNT(*) AS total FROM packages WHERE client_id=? AND status!='retirado'", (client_id,)).fetchone()["total"]
+        linked_count = db().execute("SELECT COUNT(*) AS total FROM packages WHERE client_id=?", (client_id,)).fetchone()["total"]
         edit_form = session.pop(f"client_edit_form_{client_id}", None)
-        return render_template("staff_client.html", client=client, edit_form=edit_form, packages=packages, pending_count=pending_count, linked_count=linked_count)
+        return render_template("staff_client.html", client=client, edit_form=edit_form, packages=packages, pending_count=pending_count, linked_count=linked_count, page=page, has_next=has_next)
 
     @app.post("/painel/clientes/<int:client_id>/editar")
     @login_required
     def edit_client(client_id):
-        client = db().execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+        client = db().execute(f"SELECT {CLIENT_COLUMNS} FROM clients WHERE id=?", (client_id,)).fetchone()
         if not client:
             abort(404)
         name = request.form.get("name", "").strip()
@@ -430,12 +498,12 @@ def create_app(test_config=None):
     @app.post("/painel/clientes/<int:client_id>/remover")
     @login_required
     def remove_client(client_id):
-        client = db().execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+        client = db().execute(f"SELECT {CLIENT_COLUMNS} FROM clients WHERE id=?", (client_id,)).fetchone()
         if not client or request.form.get("confirmation") != client["public_id"]:
             flash("Confirmação inválida. Digite o ID exibido.", "error")
             return redirect(url_for("staff_client", client_id=client_id))
-        pending = db().execute("SELECT COUNT(*) FROM packages WHERE client_id=? AND status!='retirado'", (client_id,)).fetchone()[0]
-        linked = db().execute("SELECT COUNT(*) FROM packages WHERE client_id=?", (client_id,)).fetchone()[0]
+        pending = db().execute("SELECT COUNT(*) AS total FROM packages WHERE client_id=? AND status!='retirado'", (client_id,)).fetchone()["total"]
+        linked = db().execute("SELECT COUNT(*) AS total FROM packages WHERE client_id=?", (client_id,)).fetchone()["total"]
         if pending:
             flash("Não é possível excluir ou desativar enquanto houver pacotes pendentes.", "error")
         elif linked or client["signature"] or client["terms_version"]:
@@ -464,31 +532,31 @@ def create_app(test_config=None):
     @app.get("/painel/pacotes/<int:package_id>")
     @login_required
     def package_detail(package_id):
-        package = db().execute("""SELECT p.*,c.name client_name,c.public_id client_public_id,c.id owner_id
+        package = db().execute(f"""SELECT {PACKAGE_COLUMNS_P},c.name client_name,c.public_id client_public_id,c.id owner_id
             FROM packages p JOIN clients c ON c.id=p.client_id WHERE p.id=?""", (package_id,)).fetchone()
         if not package:
             abort(404)
-        withdrawal = db().execute("""SELECT pu.*,pp.package_public_id,pp.client_id snapshot_client_id,
+        withdrawal = db().execute(f"""SELECT {PICKUP_COLUMNS_PU},pp.package_public_id,pp.client_id snapshot_client_id,
             pp.client_name snapshot_client_name,pp.client_public_id snapshot_client_public_id,pp.tracking_code snapshot_tracking,
             pp.package_category snapshot_category,pp.notified_at snapshot_notified_at,pp.service_amount,pp.late_days,pp.late_amount,pp.total_amount
             FROM pickup_packages pp JOIN pickups pu ON pu.id=pp.pickup_id WHERE pp.package_id=?""", (package_id,)).fetchone()
         pickup_packages = []
         if withdrawal:
-            pickup_packages = db().execute("SELECT * FROM pickup_packages WHERE pickup_id=? ORDER BY package_id", (withdrawal["id"],)).fetchall()
+            pickup_packages = db().execute(f"SELECT {PICKUP_PACKAGE_COLUMNS} FROM pickup_packages WHERE pickup_id=? ORDER BY package_id", (withdrawal["id"],)).fetchall()
         return render_template("package_detail.html", package=package, withdrawal=withdrawal, pickup_packages=pickup_packages)
 
     @app.get("/cliente/pacotes/<int:package_id>")
     @client_login_required
     def client_package_detail(package_id):
-        package = db().execute("""SELECT p.*,c.name client_name,c.public_id client_public_id,c.id owner_id
+        package = db().execute(f"""SELECT {PACKAGE_COLUMNS_P},c.name client_name,c.public_id client_public_id,c.id owner_id
             FROM packages p JOIN clients c ON c.id=p.client_id WHERE p.id=? AND p.client_id=?""", (package_id, session["client_id"])).fetchone()
         if not package:
             abort(404)
-        withdrawal = db().execute("""SELECT pu.*,pp.package_public_id,pp.client_id snapshot_client_id,
+        withdrawal = db().execute(f"""SELECT {PICKUP_COLUMNS_PU},pp.package_public_id,pp.client_id snapshot_client_id,
             pp.client_name snapshot_client_name,pp.client_public_id snapshot_client_public_id,pp.tracking_code snapshot_tracking,
             pp.package_category snapshot_category,pp.notified_at snapshot_notified_at,pp.service_amount,pp.late_days,pp.late_amount,pp.total_amount
             FROM pickup_packages pp JOIN pickups pu ON pu.id=pp.pickup_id WHERE pp.package_id=?""", (package_id,)).fetchone()
-        pickup_packages = db().execute("SELECT * FROM pickup_packages WHERE pickup_id=? AND client_id=? ORDER BY package_id", (withdrawal["id"], session["client_id"])).fetchall() if withdrawal else []
+        pickup_packages = db().execute(f"SELECT {PICKUP_PACKAGE_COLUMNS} FROM pickup_packages WHERE pickup_id=? AND client_id=? ORDER BY package_id", (withdrawal["id"], session["client_id"])).fetchall() if withdrawal else []
         return render_template("package_detail.html", package=package, withdrawal=withdrawal, pickup_packages=pickup_packages, client_view=True)
 
     @app.post("/painel/clientes/<int:client_id>/link-senha")
@@ -508,7 +576,7 @@ def create_app(test_config=None):
     @app.route("/definir-senha/<token>", methods=["GET", "POST"])
     def set_password(token):
         token_hash = hashlib.sha256(token.encode()).hexdigest()
-        row = db().execute("SELECT * FROM password_tokens WHERE token_hash=?", (token_hash,)).fetchone()
+        row = db().execute("SELECT id,client_id,token_hash,expires_at,created_at,created_by,used_at FROM password_tokens WHERE token_hash=?", (token_hash,)).fetchone()
         valid = row and not row["used_at"] and datetime.fromisoformat(row["expires_at"]) > now()
         if not valid:
             return render_template("set_password.html", invalid=True), 410
@@ -540,10 +608,11 @@ def create_app(test_config=None):
             return redirect(url_for("dashboard") + "#novo-pacote")
         width, height, length, weight = numbers
         cur = db().execute("""INSERT INTO packages(client_id, tracking, width, height, length, weight, shelf, category, base_price, status, created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,'aguardando_aviso',?)""", (selected_client["id"], data["tracking"].strip(), width, height, length, weight, data["shelf"].strip(), category, price, now().isoformat()))
-        package_id = f"PCT-{cur.lastrowid:06d}"
-        db().execute("UPDATE packages SET public_id=? WHERE id=?", (package_id, cur.lastrowid))
-        audit("criar", "pacote", cur.lastrowid, package_id)
+            VALUES(?,?,?,?,?,?,?,?,?,'aguardando_aviso',?) RETURNING id""", (selected_client["id"], data["tracking"].strip(), width, height, length, weight, data["shelf"].strip(), category, price, now().isoformat()))
+        new_package_id = cur.fetchone()["id"]
+        package_id = f"PCT-{new_package_id:06d}"
+        db().execute("UPDATE packages SET public_id=? WHERE id=?", (package_id, new_package_id))
+        audit("criar", "pacote", new_package_id, package_id)
         db().commit()
         flash(f"{package_id} registrado como {category}.", "success")
         return redirect(url_for("dashboard"))
@@ -551,7 +620,7 @@ def create_app(test_config=None):
     @app.route("/painel/pacotes/<int:package_id>/editar", methods=["GET", "POST"])
     @login_required
     def edit_package(package_id):
-        package = db().execute("""SELECT p.*,c.name client_name,c.public_id client_public_id FROM packages p JOIN clients c ON c.id=p.client_id WHERE p.id=?""", (package_id,)).fetchone()
+        package = db().execute(f"""SELECT {PACKAGE_COLUMNS_P},c.name client_name,c.public_id client_public_id FROM packages p JOIN clients c ON c.id=p.client_id WHERE p.id=?""", (package_id,)).fetchone()
         if not package:
             abort(404)
         if package["status"] != "aguardando_aviso" or db().execute("SELECT 1 FROM pickup_packages WHERE package_id=?", (package_id,)).fetchone():
@@ -584,7 +653,7 @@ def create_app(test_config=None):
     @app.route("/painel/pacotes/<int:package_id>/excluir", methods=["GET", "POST"])
     @login_required
     def delete_package(package_id):
-        package = db().execute("""SELECT p.*,c.name client_name FROM packages p JOIN clients c ON c.id=p.client_id WHERE p.id=?""", (package_id,)).fetchone()
+        package = db().execute(f"""SELECT {PACKAGE_COLUMNS_P},c.name client_name FROM packages p JOIN clients c ON c.id=p.client_id WHERE p.id=?""", (package_id,)).fetchone()
         if not package:
             abort(404)
         allowed = package["status"] == "aguardando_aviso" and not db().execute("SELECT 1 FROM pickup_packages WHERE package_id=?", (package_id,)).fetchone()
@@ -628,7 +697,7 @@ def create_app(test_config=None):
         if not ids:
             return {"error": "Selecione ao menos um pacote."}, 400
         placeholders = ",".join("?" * len(ids))
-        packages = db().execute(f"SELECT * FROM packages WHERE id IN ({placeholders}) AND status='aguardando_retirada'", ids).fetchall()
+        packages = db().execute(f"SELECT {PACKAGE_COLUMNS} FROM packages WHERE id IN ({placeholders}) AND status='aguardando_retirada'", ids).fetchall()
         if len(packages) != len(ids):
             return {"error": "Há pacote indisponível para retirada."}, 400
         totals = [fees(package) for package in packages]
@@ -683,7 +752,7 @@ def create_app(test_config=None):
         try:
             # Serializa a conferência e a gravação para que duas confirmações
             # simultâneas não consigam retirar o mesmo pacote.
-            connection.execute("BEGIN IMMEDIATE")
+            connection.begin_write()
             existing = connection.execute(
                 f"SELECT pp.package_id,pp.pickup_id FROM pickup_packages pp WHERE pp.package_id IN ({placeholders}) LIMIT 1",
                 ids,
@@ -694,7 +763,7 @@ def create_app(test_config=None):
                 return redirect(url_for("package_detail", package_id=existing["package_id"]))
 
             packages = connection.execute(
-                f"SELECT * FROM packages WHERE id IN ({placeholders}) AND status='aguardando_retirada' ORDER BY id",
+                f"SELECT {PACKAGE_COLUMNS} FROM packages WHERE id IN ({placeholders}) AND status='aguardando_retirada' ORDER BY id",
                 ids,
             ).fetchall()
             if len(packages) != len(ids):
@@ -721,12 +790,12 @@ def create_app(test_config=None):
                 base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,
                 discount_type,discount_input,discount_amount,original_total,final_total,discount_applied_by,
                 surcharge_amount,surcharge_reason,surcharge_applied_by)
-                VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?)""",
+                VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
                 (receiver, document, document_type, signature, session["staff"], picked_at, sum(x["base"] for x in totals),
                  sum(x["late_fee"] for x in totals), float(final_total), payment_method, picked_at, session["staff"],
                  discount_type, float(discount_input) if discount_input is not None else None, float(discount_amount),
                  float(original_total), float(final_total), session["staff"], float(surcharge_amount), surcharge_reason, session["staff"]))
-            pickup_id = cur.lastrowid
+            pickup_id = cur.fetchone()["id"]
             for package, total in zip(packages, totals):
                 owner = connection.execute("SELECT id,name,public_id FROM clients WHERE id=?", (package["client_id"],)).fetchone()
                 connection.execute("""INSERT INTO pickup_packages(
@@ -735,7 +804,7 @@ def create_app(test_config=None):
                     (pickup_id, package["id"], total["base"], total["late_fee"], package["public_id"], owner["id"], owner["name"], owner["public_id"], package["tracking"], package["category"], package["notified_at"], total["base"], total["late_days"], total["total"]))
                 connection.execute("UPDATE packages SET status='retirado', picked_at=? WHERE id=?", (picked_at, package["id"]))
             connection.commit()
-        except sqlite3.IntegrityError:
+        except DatabaseIntegrityError:
             connection.rollback()
             existing = connection.execute(
                 f"SELECT package_id,pickup_id FROM pickup_packages WHERE package_id IN ({placeholders}) LIMIT 1",
@@ -754,7 +823,7 @@ def create_app(test_config=None):
     @app.get("/comprovantes/<int:pickup_id>")
     @login_required
     def receipt(pickup_id):
-        pickup = db().execute("SELECT * FROM pickups WHERE id=?", (pickup_id,)).fetchone()
+        pickup = db().execute(f"SELECT {PICKUP_COLUMNS} FROM pickups WHERE id=?", (pickup_id,)).fetchone()
         if not pickup:
             abort(404)
         packages = db().execute("SELECT p.id package_id,p.public_id, pp.base_amount, pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=?", (pickup_id,)).fetchall()
@@ -762,7 +831,7 @@ def create_app(test_config=None):
 
     @app.get("/comprovantes/<int:pickup_id>/pacotes/<int:package_id>.pdf")
     def receipt_pdf(pickup_id, package_id):
-        row = db().execute("""SELECT pu.*,pp.package_public_id,pp.client_id snapshot_client_id,p.client_id owner_id,
+        row = db().execute(f"""SELECT {PICKUP_COLUMNS_PU},pp.package_public_id,pp.client_id snapshot_client_id,p.client_id owner_id,
             pp.client_name snapshot_client_name,pp.client_public_id snapshot_client_public_id,pp.tracking_code snapshot_tracking,
             pp.package_category snapshot_category,pp.notified_at snapshot_notified_at,pp.service_amount,pp.late_days,pp.late_amount,pp.total_amount
             FROM pickup_packages pp JOIN pickups pu ON pu.id=pp.pickup_id JOIN packages p ON p.id=pp.package_id
@@ -772,9 +841,9 @@ def create_app(test_config=None):
         if not session.get("staff") and session.get("client_id") not in (row["snapshot_client_id"], row["owner_id"]):
             abort(403)
         if session.get("staff"):
-            receipt_packages = db().execute("SELECT * FROM pickup_packages WHERE pickup_id=? ORDER BY package_id", (pickup_id,)).fetchall()
+            receipt_packages = db().execute(f"SELECT {PICKUP_PACKAGE_COLUMNS} FROM pickup_packages WHERE pickup_id=? ORDER BY package_id", (pickup_id,)).fetchall()
         else:
-            receipt_packages = db().execute("SELECT * FROM pickup_packages WHERE pickup_id=? AND client_id=? ORDER BY package_id", (pickup_id, session["client_id"])).fetchall()
+            receipt_packages = db().execute(f"SELECT {PICKUP_PACKAGE_COLUMNS} FROM pickup_packages WHERE pickup_id=? AND client_id=? ORDER BY package_id", (pickup_id, session["client_id"])).fetchall()
         pdf = build_receipt_pdf(row, receipt_packages)
         filename = f"comprovante-{row['package_public_id'] or package_id}.pdf"
         return send_file(pdf, mimetype="application/pdf", as_attachment=True, download_name=filename)
@@ -792,22 +861,26 @@ def fees(package, today=None):
     return calculate_fees(package["base_price"], package["notified_at"], package["picked_at"], today)
 
 
-def init_db(path):
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
-    connection.executescript("""
-    CREATE TABLE IF NOT EXISTS clients (id INTEGER PRIMARY KEY, public_id TEXT UNIQUE, name TEXT NOT NULL, cpf TEXT NOT NULL, phone TEXT NOT NULL, email TEXT, terms_version TEXT NOT NULL, terms_text TEXT, signature TEXT NOT NULL, accepted_at TEXT NOT NULL, password_hash TEXT, active INTEGER NOT NULL DEFAULT 1, session_version INTEGER NOT NULL DEFAULT 1, residential_cep TEXT, residential_street TEXT, residential_number TEXT, residential_district TEXT, residential_city TEXT, residential_state TEXT, residential_complement TEXT);
-    CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY, public_id TEXT UNIQUE, client_id INTEGER NOT NULL REFERENCES clients(id), tracking TEXT, width REAL NOT NULL, height REAL NOT NULL, length REAL NOT NULL, weight REAL NOT NULL, shelf TEXT, category TEXT NOT NULL, base_price REAL NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, notified_at TEXT, picked_at TEXT);
-    CREATE TABLE IF NOT EXISTS pickups (id INTEGER PRIMARY KEY, receiver_name TEXT NOT NULL, receiver_document TEXT NOT NULL, document_type TEXT, signature TEXT NOT NULL, staff TEXT NOT NULL, picked_at TEXT NOT NULL, base_total REAL NOT NULL, late_total REAL NOT NULL, total_paid REAL NOT NULL, payment_method TEXT, payment_confirmed INTEGER NOT NULL, payment_confirmed_at TEXT, payment_confirmed_by TEXT, discount_type TEXT, discount_input REAL, discount_amount REAL, original_total REAL, final_total REAL, discount_applied_by TEXT, surcharge_amount REAL, surcharge_reason TEXT, surcharge_applied_by TEXT);
-    CREATE TABLE IF NOT EXISTS pickup_packages (pickup_id INTEGER REFERENCES pickups(id), package_id INTEGER UNIQUE REFERENCES packages(id), base_amount REAL NOT NULL, late_amount REAL NOT NULL, package_public_id TEXT, client_id INTEGER, client_name TEXT, client_public_id TEXT, tracking_code TEXT, package_category TEXT, notified_at TEXT, service_amount REAL, late_days INTEGER, total_amount REAL, PRIMARY KEY(pickup_id, package_id));
-    CREATE TABLE IF NOT EXISTS password_tokens (id INTEGER PRIMARY KEY, client_id INTEGER NOT NULL REFERENCES clients(id), token_hash TEXT UNIQUE NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL, used_at TEXT);
-    CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, identifier TEXT NOT NULL, succeeded INTEGER NOT NULL, attempted_at TEXT NOT NULL);
-    CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts(kind,identifier,attempted_at);
-    CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY, actor TEXT NOT NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id INTEGER, details TEXT, created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), pix_receiver_name TEXT);
-    INSERT OR IGNORE INTO settings(id,pix_receiver_name) VALUES(1,'AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS');
-    """)
-    columns = {row[1] for row in connection.execute("PRAGMA table_info(clients)")}
+def init_db(database):
+    if not is_postgres(database):
+        Path(database).parent.mkdir(parents=True, exist_ok=True)
+    connection = DatabaseConnection(database)
+    id_type = "BIGSERIAL PRIMARY KEY" if connection.postgres else "INTEGER PRIMARY KEY"
+    statements = [
+        f"CREATE TABLE IF NOT EXISTS clients (id {id_type}, public_id TEXT UNIQUE, name TEXT NOT NULL, cpf TEXT NOT NULL, phone TEXT NOT NULL, email TEXT, terms_version TEXT NOT NULL, terms_text TEXT, signature TEXT NOT NULL, accepted_at TEXT NOT NULL, password_hash TEXT, active INTEGER NOT NULL DEFAULT 1, session_version INTEGER NOT NULL DEFAULT 1, residential_cep TEXT, residential_street TEXT, residential_number TEXT, residential_district TEXT, residential_city TEXT, residential_state TEXT, residential_complement TEXT)",
+        f"CREATE TABLE IF NOT EXISTS packages (id {id_type}, public_id TEXT UNIQUE, client_id BIGINT NOT NULL REFERENCES clients(id), tracking TEXT, width DOUBLE PRECISION NOT NULL, height DOUBLE PRECISION NOT NULL, length DOUBLE PRECISION NOT NULL, weight DOUBLE PRECISION NOT NULL, shelf TEXT, category TEXT NOT NULL, base_price DOUBLE PRECISION NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, notified_at TEXT, picked_at TEXT)",
+        f"CREATE TABLE IF NOT EXISTS pickups (id {id_type}, receiver_name TEXT NOT NULL, receiver_document TEXT NOT NULL, document_type TEXT, signature TEXT NOT NULL, staff TEXT NOT NULL, picked_at TEXT NOT NULL, base_total DOUBLE PRECISION NOT NULL, late_total DOUBLE PRECISION NOT NULL, total_paid DOUBLE PRECISION NOT NULL, payment_method TEXT, payment_confirmed INTEGER NOT NULL, payment_confirmed_at TEXT, payment_confirmed_by TEXT, discount_type TEXT, discount_input DOUBLE PRECISION, discount_amount DOUBLE PRECISION, original_total DOUBLE PRECISION, final_total DOUBLE PRECISION, discount_applied_by TEXT, surcharge_amount DOUBLE PRECISION, surcharge_reason TEXT, surcharge_applied_by TEXT)",
+        "CREATE TABLE IF NOT EXISTS pickup_packages (pickup_id BIGINT REFERENCES pickups(id), package_id BIGINT UNIQUE REFERENCES packages(id), base_amount DOUBLE PRECISION NOT NULL, late_amount DOUBLE PRECISION NOT NULL, package_public_id TEXT, client_id BIGINT, client_name TEXT, client_public_id TEXT, tracking_code TEXT, package_category TEXT, notified_at TEXT, service_amount DOUBLE PRECISION, late_days INTEGER, total_amount DOUBLE PRECISION, PRIMARY KEY(pickup_id, package_id))",
+        f"CREATE TABLE IF NOT EXISTS password_tokens (id {id_type}, client_id BIGINT NOT NULL REFERENCES clients(id), token_hash TEXT UNIQUE NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL, used_at TEXT)",
+        f"CREATE TABLE IF NOT EXISTS login_attempts (id {id_type}, kind TEXT NOT NULL, identifier TEXT NOT NULL, succeeded INTEGER NOT NULL, attempted_at TEXT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts(kind,identifier,attempted_at)",
+        f"CREATE TABLE IF NOT EXISTS audit_logs (id {id_type}, actor TEXT NOT NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id BIGINT, details TEXT, created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), pix_receiver_name TEXT)",
+        "INSERT INTO settings(id,pix_receiver_name) VALUES(1,'AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS') ON CONFLICT(id) DO NOTHING",
+    ]
+    for statement in statements:
+        connection.execute(statement)
+    columns = table_columns(connection, "clients")
     if "password_hash" not in columns:
         connection.execute("ALTER TABLE clients ADD COLUMN password_hash TEXT")
     if "terms_text" not in columns:
@@ -832,10 +905,17 @@ def init_db(path):
 
 
 def ensure_columns(connection, table, definitions):
-    existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+    existing = table_columns(connection, table)
     for name, data_type in definitions.items():
         if name not in existing:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {data_type}")
+
+
+def table_columns(connection, table):
+    if connection.postgres:
+        rows = connection.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=?", (table,)).fetchall()
+        return {row["column_name"] for row in rows}
+    return {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
 
 
 def display(value, money=False):
