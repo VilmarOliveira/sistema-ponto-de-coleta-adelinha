@@ -176,3 +176,9 @@ Somente um atendente autenticado pode aplicar desconto. Na Área do Ponto, infor
 ### Acréscimo na retirada
 
 O atendente pode informar um acréscimo monetário não negativo com até duas casas decimais. Quando o valor for maior que zero, o motivo é obrigatório. O sistema soma pacotes e atraso, aplica o desconto escolhido e, em seguida, adiciona o acréscimo manual. Valor, motivo, atendente, subtotal, desconto e total final ficam preservados no recibo, nos detalhes e no PDF. A migração adiciona esses campos sem alterar retiradas antigas.
+
+## Testes no GitHub Actions
+
+O workflow `.github/workflows/tests.yml` executa a suíte em cada Pull Request. Ele usa SQLite temporário para os testes funcionais e inicia um PostgreSQL 16 isolado para o teste de compatibilidade. Não utiliza `DATABASE_URL`, dados ou credenciais do Neon de produção e não exige segredo adicional no GitHub.
+
+O Render continua usando somente a variável `DATABASE_URL` configurada no painel do serviço. Não altere essa variável e nunca copie sua conexão para arquivos do projeto, logs ou Pull Requests.

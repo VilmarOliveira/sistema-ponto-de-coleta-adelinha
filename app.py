@@ -1,6 +1,5 @@
 import os
 import secrets
-import sqlite3
 import hashlib
 import base64
 import math
@@ -13,9 +12,6 @@ from functools import wraps
 from pathlib import Path
 
 from flask import Flask, abort, flash, redirect, render_template, request, send_file, session, url_for
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.utils import ImageReader
-from reportlab.pdfgen import canvas
 import qrcode
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -23,6 +19,8 @@ from core import (
     TZ, calculate_discount, calculate_fees, classify_package, package_arrival_message,
     pix_payload, valid_cpf, validate_surcharge,
 )
+from database import DatabaseConnection, DatabaseIntegrityError, is_postgres
+from receipt_pdf import build_receipt_pdf
 
 ROOT = Path(__file__).parent
 TERMS_VERSION = "MINUTA-TESTE-v1"
@@ -37,53 +35,6 @@ PICKUP_COLUMNS = "id,receiver_name,receiver_document,document_type,signature,sta
 PICKUP_PACKAGE_COLUMNS = "pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,tracking_code,package_category,notified_at,service_amount,late_days,total_amount"
 PACKAGE_COLUMNS_P = ",".join(f"p.{column}" for column in PACKAGE_COLUMNS.split(","))
 PICKUP_COLUMNS_PU = ",".join(f"pu.{column}" for column in PICKUP_COLUMNS.split(","))
-
-
-def is_postgres(database):
-    return str(database).startswith(("postgres://", "postgresql://"))
-
-
-class DatabaseIntegrityError(Exception):
-    pass
-
-
-class DatabaseConnection:
-    """Pequena camada de compatibilidade entre SQLite local e PostgreSQL/Neon."""
-    def __init__(self, database):
-        self.postgres = is_postgres(database)
-        if self.postgres:
-            import psycopg
-            from psycopg.rows import dict_row
-            self.connection = psycopg.connect(database, row_factory=dict_row)
-        else:
-            self.connection = sqlite3.connect(database)
-            self.connection.row_factory = sqlite3.Row
-            self.connection.execute("PRAGMA foreign_keys = ON")
-
-    def execute(self, sql, params=()):
-        if self.postgres:
-            import psycopg
-            sql = sql.replace("?", "%s")
-            try:
-                return self.connection.execute(sql, params)
-            except psycopg.IntegrityError as error:
-                raise DatabaseIntegrityError from error
-        try:
-            return self.connection.execute(sql, params)
-        except sqlite3.IntegrityError as error:
-            raise DatabaseIntegrityError from error
-
-    def begin_write(self):
-        self.execute("BEGIN" if self.postgres else "BEGIN IMMEDIATE")
-
-    def commit(self):
-        self.connection.commit()
-
-    def rollback(self):
-        self.connection.rollback()
-
-    def close(self):
-        self.connection.close()
 
 
 def terms_text():
@@ -854,7 +805,7 @@ def create_app(test_config=None):
             receipt_packages = db().execute(f"SELECT {PICKUP_PACKAGE_COLUMNS} FROM pickup_packages WHERE pickup_id=? ORDER BY package_id", (pickup_id,)).fetchall()
         else:
             receipt_packages = db().execute(f"SELECT {PICKUP_PACKAGE_COLUMNS} FROM pickup_packages WHERE pickup_id=? AND client_id=? ORDER BY package_id", (pickup_id, session["client_id"])).fetchall()
-        pdf = build_receipt_pdf(row, receipt_packages)
+        pdf = build_receipt_pdf(row, receipt_packages, ADDRESS)
         filename = f"comprovante-{row['package_public_id'] or package_id}.pdf"
         return send_file(pdf, mimetype="application/pdf", as_attachment=True, download_name=filename)
 
@@ -949,83 +900,6 @@ def qr_code_data_url(payload):
     output = BytesIO()
     image.save(output, format="PNG")
     return "data:image/png;base64," + base64.b64encode(output.getvalue()).decode()
-
-
-def build_receipt_pdf(withdrawal, packages):
-    """Cria uma cópia imutável usando exclusivamente os valores salvos na retirada."""
-    output = BytesIO()
-    pdf = canvas.Canvas(output, pagesize=A4, pageCompression=0)
-    width, height = A4
-    pdf.setTitle(f"Comprovante {display(withdrawal['package_public_id'])}")
-    pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawString(45, height - 50, "PONTO DE COLETA ADELINHA")
-    pdf.setFont("Helvetica", 9)
-    discount_input = display(withdrawal["discount_input"])
-    if withdrawal["discount_input"] is not None:
-        discount_input = (f"{float(withdrawal['discount_input']):.2f}%" if withdrawal["discount_type"] == "porcentagem"
-                          else display(withdrawal["discount_input"], True))
-    lines = [
-        "CNPJ: 38.145.273/0001-05",
-        ADDRESS,
-        "WhatsApp: (16) 98800-4966",
-        "",
-        f"Pacote consultado: {display(withdrawal['package_public_id'])}",
-        f"Cliente: {display(withdrawal['snapshot_client_name'])}",
-        f"ID do cliente: {display(withdrawal['snapshot_client_public_id'])}",
-        f"Retirado por: {display(withdrawal['receiver_name'])}",
-        f"Documento: {display(withdrawal['document_type'])} {display(withdrawal['receiver_document'])}",
-        f"Data e hora: {format_local(withdrawal['picked_at'])}",
-        f"Valor do serviço: {display(withdrawal['service_amount'], True)}",
-        f"Dias de atraso: {display(withdrawal['late_days'])}",
-        f"Taxa extra: {display(withdrawal['late_amount'], True)}",
-        f"Valor deste pacote antes do desconto: {display(withdrawal['total_amount'], True)}",
-        f"Acréscimo manual: {display(withdrawal['surcharge_amount'], True)}",
-        f"Motivo do acréscimo: {display(withdrawal['surcharge_reason'])}",
-        f"Acréscimo aplicado por: {display(withdrawal['surcharge_applied_by'])}",
-        f"Total original da retirada: {display(withdrawal['original_total'], True)}",
-        f"Modalidade do desconto: {withdrawal['discount_type'] or ('Sem desconto' if withdrawal['original_total'] is not None else 'Não registrado')}",
-        f"Valor/percentual informado: {discount_input}",
-        f"Desconto calculado: {display(withdrawal['discount_amount'], True)}",
-        f"Total final pago: {display(withdrawal['final_total'] if withdrawal['final_total'] is not None else withdrawal['total_paid'], True)}",
-        f"Desconto autorizado por: {display(withdrawal['discount_applied_by'])}",
-        f"Forma de pagamento: {display(withdrawal['payment_method'])}",
-        f"Pagamento confirmado: {format_local(withdrawal['payment_confirmed_at'])}",
-        f"Atendente: {display(withdrawal['payment_confirmed_by'] or withdrawal['staff'])}",
-    ]
-    y = height - 72
-    for line in lines:
-        pdf.drawString(45, y, line)
-        y -= 16
-    pdf.setFont("Helvetica-Bold", 10)
-    pdf.drawString(45, y, "Pacotes desta retirada:")
-    y -= 16
-    pdf.setFont("Helvetica", 9)
-    for item in packages:
-        pdf.drawString(45, y, f"{display(item['package_public_id'])} | rastreio {display(item['tracking_code'])} | {display(item['package_category'])} | total {display(item['total_amount'], True)}")
-        y -= 14
-    pdf.drawString(45, y, f"TOTAL FINAL DA RETIRADA: {display(withdrawal['final_total'] if withdrawal['final_total'] is not None else withdrawal['total_paid'], True)}")
-    y -= 20
-    statement = "Confirmo que retirei o pacote identificado neste comprovante e que o pagamento informado foi realizado."
-    pdf.setFont("Helvetica-Bold", 9)
-    pdf.drawString(45, y - 10, statement)
-    y -= 55
-    pdf.setFont("Helvetica", 9)
-    pdf.drawString(45, y, "Assinatura de quem retirou:")
-    signature = withdrawal["signature"]
-    if signature and signature.startswith("data:image/png;base64,"):
-        image_data = base64.b64decode(signature.split(",", 1)[1])
-        pdf.drawImage(ImageReader(BytesIO(image_data)), 45, y - 100, width=260, height=90, preserveAspectRatio=True, anchor="sw")
-    else:
-        pdf.drawString(45, y - 20, "Não registrado")
-    pdf.save()
-    output.seek(0)
-    return output
-
-
-def format_local(value):
-    if not value:
-        return "Não registrado"
-    return datetime.fromisoformat(value).astimezone(TZ).strftime("%d/%m/%Y %H:%M")
 
 
 if __name__ == "__main__":
