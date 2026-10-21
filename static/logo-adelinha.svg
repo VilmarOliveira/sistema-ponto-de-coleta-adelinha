@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 430 120" role="img" aria-labelledby="title description">
+  <title id="title">Ponto de Coleta Adelinha</title>
+  <desc id="description">Marca do Ponto de Coleta Adelinha, unidade Amor Infinito</desc>
+  <g fill="none" stroke="#ff4b16" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M43 52 74 35l31 17v35L74 104 43 87Z"/>
+    <path d="m43 52 31 18 31-18M74 70v34"/>
+    <path d="M74 13c-13 0-22 10-22 22 0 17 22 37 22 37s22-20 22-37c0-12-9-22-22-22Z" fill="#ff4b16" stroke="none"/>
+    <circle cx="74" cy="35" r="7" fill="#fff" stroke="none"/>
+  </g>
+  <text x="125" y="30" fill="#142441" font-family="Arial, sans-serif" font-size="22" font-weight="800">PONTO DE</text>
+  <text x="123" y="66" fill="#ff4b16" font-family="Arial, sans-serif" font-size="40" font-weight="900" letter-spacing="1">COLETA</text>
+  <path d="M122 74h238a9 9 0 0 1 9 9v20H122Z" fill="#4c2484"/>
+  <text x="169" y="99" fill="#fff" font-family="Arial, sans-serif" font-size="28" font-style="italic" font-weight="900">ADELINHA</text>
+  <g fill="#ff4b16"><path d="M125 80h30l-9 4 9 4h-30Z"/><path d="M125 92h31l-10 4 10 4h-31Z"/></g>
+  <text x="165" y="116" fill="#142441" font-family="Arial, sans-serif" font-size="9" font-weight="700" letter-spacing="2">UNIDADE AMOR INFINITO</text>
+</svg>
