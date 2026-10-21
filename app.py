@@ -22,7 +22,7 @@ from core import (
 )
 from database import DatabaseConnection, DatabaseIntegrityError, is_postgres
 from receipt_pdf import build_receipt_pdf
-from notifications import send_code
+from notifications import notification_config_status, send_code
 from contract import CONTRACT_TEXT, CONTRACT_VERSION
 from contract_pdf import build_contract_pdf
 
@@ -89,6 +89,13 @@ def create_app(test_config=None):
 
     def now():
         return datetime.now(TZ)
+
+    def mask_contact(channel, destination):
+        if channel == "email" and "@" in destination:
+            local, domain = destination.split("@", 1)
+            return f"{local[:2]}***@{domain}"
+        value = digits(destination)
+        return f"***{value[-4:]}" if value else "contato cadastrado"
 
     def login_required(view):
         @wraps(view)
@@ -227,8 +234,11 @@ def create_app(test_config=None):
     def header_identity():
         setting = db().execute("SELECT header_image,header_image_mime FROM settings WHERE id=1").fetchone()
         if setting and setting["header_image"]:
-            return Response(bytes(setting["header_image"]), mimetype=setting["header_image_mime"], headers={"Cache-Control": "public, max-age=3600"})
-        return redirect(url_for("static", filename="logo-adelinha.svg"))
+            return Response(bytes(setting["header_image"]), mimetype=setting["header_image_mime"],
+                            headers={"Cache-Control": "no-store, max-age=0"})
+        response = redirect(url_for("static", filename="logo-adelinha.svg", v="default-1"))
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        return response
 
     @app.route("/painel/configuracoes/identidade", methods=["GET", "POST"])
     @login_required
@@ -423,26 +433,41 @@ def create_app(test_config=None):
             return render_template("password_recovery.html", stage="request")
         stage = request.form.get("stage")
         if stage == "request":
+            session.pop("password_recovery_id", None)
             cpf, channel = digits(request.form.get("cpf", "")), request.form.get("channel")
+            if channel not in ("email", "whatsapp"):
+                flash("Escolha E-mail ou WhatsApp.", "error")
+                return render_template("password_recovery.html", stage="request", entered_cpf=request.form.get("cpf", "")), 400
             client = db().execute("SELECT id,phone,email FROM clients WHERE REPLACE(REPLACE(REPLACE(cpf,'.',''),'-',''),' ','')=? AND active=1", (cpf,)).fetchone()
-            if client and channel in ("email", "whatsapp"):
-                destination = client["email"] if channel == "email" else client["phone"]
-                if destination:
-                    code = f"{secrets.randbelow(1000000):06d}"
-                    code_hash = hashlib.sha256(code.encode()).hexdigest()
-                    expires = (now() + timedelta(minutes=10)).isoformat()
-                    db().execute("UPDATE verification_codes SET used_at=? WHERE client_id=? AND purpose='password_recovery' AND used_at IS NULL", (now().isoformat(), client["id"]))
-                    cur = db().execute("INSERT INTO verification_codes(client_id,purpose,channel,destination,code_hash,expires_at,attempts,sends,created_at) VALUES(?,?,?,?,?,?,0,1,?) RETURNING id",
-                        (client["id"], "password_recovery", channel, destination, code_hash, expires, now().isoformat()))
-                    verification_id = cur.fetchone()["id"]; db().commit()
-                    try:
-                        sent, detail = send_code(channel, destination, code)
-                    except Exception as error:
-                        sent, detail = False, type(error).__name__
-                    db().execute("UPDATE verification_codes SET provider_status=? WHERE id=?", (detail, verification_id)); db().commit()
-                    if sent: session["password_recovery_id"] = verification_id
-            flash("Se os dados estiverem corretos, enviaremos as instruções ao contato cadastrado.", "success")
-            return render_template("password_recovery.html", stage="confirm")
+            # Para uma conta inexistente, mantém uma resposta neutra e não revela cadastros.
+            if not client:
+                flash("Se os dados estiverem corretos, enviaremos as instruções ao contato cadastrado.", "success")
+                return render_template("password_recovery.html", stage="confirm")
+            destination = client["email"] if channel == "email" else client["phone"]
+            if not destination:
+                flash("O canal escolhido não está disponível nesse cadastro. Tente o outro canal ou procure a equipe.", "error")
+                return render_template("password_recovery.html", stage="request", entered_cpf=request.form.get("cpf", "")), 400
+            cutoff = (now() - timedelta(minutes=15)).isoformat()
+            sent_count = db().execute("SELECT COUNT(id) AS total FROM verification_codes WHERE client_id=? AND purpose='password_recovery' AND created_at>=?", (client["id"], cutoff)).fetchone()["total"]
+            if sent_count >= 3:
+                flash("Limite de envios atingido. Aguarde 15 minutos antes de tentar novamente.", "error")
+                return render_template("password_recovery.html", stage="request", entered_cpf=request.form.get("cpf", "")), 429
+            code = f"{secrets.randbelow(1000000):06d}"
+            created_at, expires = now().isoformat(), (now() + timedelta(minutes=10)).isoformat()
+            sent, detail = send_code(channel, destination, code)
+            cur = db().execute("INSERT INTO verification_codes(client_id,purpose,channel,destination,code_hash,expires_at,attempts,sends,provider_status,created_at,used_at) VALUES(?,?,?,?,?,?,0,1,?,?,?) RETURNING id",
+                (client["id"], "password_recovery", channel, destination, hashlib.sha256(code.encode()).hexdigest(), expires, detail, created_at, None if sent else created_at))
+            verification_id = cur.fetchone()["id"]
+            if sent:
+                db().execute("UPDATE verification_codes SET used_at=? WHERE client_id=? AND purpose='password_recovery' AND id<>? AND used_at IS NULL", (created_at, client["id"], verification_id))
+                session["password_recovery_id"] = verification_id
+                session["password_recovery_contact"] = mask_contact(channel, destination)
+            db().commit()
+            if not sent:
+                flash(f"Não foi possível enviar o código. {detail}. Você pode corrigir o canal e tentar novamente.", "error")
+                return render_template("password_recovery.html", stage="request", entered_cpf=request.form.get("cpf", "")), 503
+            flash("O provedor aceitou o envio. Confira o contato cadastrado; o código expira em 10 minutos.", "success")
+            return render_template("password_recovery.html", stage="confirm", masked_contact=session.get("password_recovery_contact"))
         verification_id = session.get("password_recovery_id")
         row = db().execute("SELECT id,client_id,code_hash,expires_at,attempts,used_at FROM verification_codes WHERE id=? AND purpose='password_recovery'", (verification_id,)).fetchone() if verification_id else None
         password = request.form.get("password", "")
@@ -450,10 +475,11 @@ def create_app(test_config=None):
         if not valid or len(password) < 8 or password != request.form.get("password_confirm"):
             if row: db().execute("UPDATE verification_codes SET attempts=attempts+1 WHERE id=?", (row["id"],)); db().commit()
             flash("Código inválido ou expirado, ou as senhas não conferem.", "error")
-            return render_template("password_recovery.html", stage="confirm"), 400
+            return render_template("password_recovery.html", stage="confirm", masked_contact=session.get("password_recovery_contact")), 400
         db().execute("UPDATE clients SET password_hash=?,session_version=session_version+1 WHERE id=?", (generate_password_hash(password), row["client_id"]))
         db().execute("UPDATE verification_codes SET used_at=? WHERE id=?", (now().isoformat(), row["id"])); db().commit()
-        session.pop("password_recovery_id", None); flash("Senha alterada com sucesso!", "success")
+        session.pop("password_recovery_id", None); session.pop("password_recovery_contact", None)
+        flash("Senha alterada com sucesso!", "success")
         return redirect(url_for("client_login"))
 
     @app.post("/cliente/login")
@@ -675,6 +701,15 @@ def create_app(test_config=None):
             flash("Cliente excluído definitivamente.", "success")
             return redirect(url_for("dashboard"))
         return redirect(url_for("staff_client", client_id=client_id))
+
+    @app.get("/painel/configuracoes/notificacoes")
+    @login_required
+    def notification_settings():
+        records = db().execute("SELECT channel,destination,provider_status,created_at FROM verification_codes ORDER BY id DESC LIMIT 50").fetchall()
+        safe_records = [{"channel": row["channel"], "destination": mask_contact(row["channel"], row["destination"]),
+                         "provider_status": row["provider_status"] or "Não registrado", "created_at": row["created_at"]}
+                        for row in records]
+        return render_template("notification_settings.html", status=notification_config_status(), records=safe_records)
 
     @app.post("/painel/configuracoes/pix")
     @login_required

@@ -662,3 +662,66 @@ def test_client_cannot_download_another_clients_pdf(app, client):
     with client.session_transaction() as session:
         session["client_id"] = 1
     assert client.get("/comprovantes/1/pacotes/1.pdf").status_code == 403
+
+
+def test_password_recovery_reports_provider_failure_and_allows_retry(app, client, monkeypatch):
+    import app as app_module
+    register(client)
+    monkeypatch.setattr(app_module, "send_code", lambda channel, destination, code: (False, "SMTP recusou o destinatário"))
+    response = client.post("/cliente/recuperar-senha", data={"stage": "request", "cpf": "529.982.247-25",
+        "channel": "email", "csrf_token": token(client)})
+    assert response.status_code == 503
+    assert "Não foi possível enviar o código" in response.text
+    assert "tentar novamente" in response.text.lower()
+    with client.session_transaction() as current_session:
+        assert "password_recovery_id" not in current_session
+    row = sqlite3.connect(app.config["DATABASE"]).execute("SELECT provider_status,used_at FROM verification_codes").fetchone()
+    assert row[0] == "SMTP recusou o destinatário" and row[1]
+
+
+def test_password_recovery_delivered_code_changes_password(app, client, monkeypatch):
+    import app as app_module
+    register(client)
+    captured = {}
+    def accepted(channel, destination, code):
+        captured.update(channel=channel, destination=destination, code=code)
+        return True, "aceito pelo servidor SMTP para processamento"
+    monkeypatch.setattr(app_module, "send_code", accepted)
+    sent = client.post("/cliente/recuperar-senha", data={"stage": "request", "cpf": "52998224725",
+        "channel": "email", "csrf_token": token(client)})
+    assert sent.status_code == 200 and "expira em 10 minutos" in sent.text
+    assert captured["destination"] == "cliente@example.com"
+    changed = client.post("/cliente/recuperar-senha", data={"stage": "confirm", "code": captured["code"],
+        "password": "nova-senha-segura", "password_confirm": "nova-senha-segura", "csrf_token": token(client)}, follow_redirects=True)
+    assert "Senha alterada com sucesso" in changed.text
+    login_result = client.post("/cliente/login", data={"cpf": "52998224725", "password": "nova-senha-segura",
+        "csrf_token": token(client)})
+    assert login_result.status_code == 302 and "/cliente" in login_result.headers["Location"]
+
+
+def test_restore_visual_identity_updates_header_and_survives_reload(app, client):
+    login(client)
+    connection = sqlite3.connect(app.config["DATABASE"])
+    connection.execute("UPDATE settings SET header_image=?,header_image_mime='image/png' WHERE id=1", (b"custom-image",))
+    connection.commit()
+    custom = client.get("/identidade/cabecalho")
+    assert custom.data == b"custom-image"
+    assert custom.headers["Cache-Control"] == "no-store, max-age=0"
+
+    restored = client.post("/painel/configuracoes/identidade", data={"restore": "yes", "csrf_token": token(client)}, follow_redirects=True)
+    assert restored.status_code == 200
+    assert "Identidade visual alterada com sucesso" in restored.text
+    assert sqlite3.connect(app.config["DATABASE"]).execute("SELECT header_image,header_image_mime FROM settings WHERE id=1").fetchone() == (None, None)
+    after_reload = client.get("/identidade/cabecalho")
+    assert after_reload.status_code == 302
+    assert "logo-adelinha.svg" in after_reload.headers["Location"]
+    assert after_reload.headers["Cache-Control"] == "no-store, max-age=0"
+
+
+def test_support_button_and_client_login_without_legacy_notice(client):
+    page = client.get("/cliente/login").text
+    assert "https://wa.me/5516988004966" in page
+    assert "Ol%C3%A1%21%20Preciso%20de%20suporte%20com%20o%20Guarda%20A%C3%AD." in page
+    assert ">Suporte<" in page
+    assert "Cliente antigo?" not in page
+    assert "Procure a equipe presencialmente" not in page

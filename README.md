@@ -65,6 +65,33 @@ export COOKIE_SECURE=1
 
 Copie a conexão no painel do Neon e cadastre-a como segredo `DATABASE_URL`; nunca coloque a URL ou a senha no código, GitHub ou `render.yaml`. Execute atrás de HTTPS com um servidor WSGI, por exemplo `gunicorn 'app:create_app()'`. A inicialização cria somente tabelas e colunas ausentes e não apaga registros. Configure backups no Neon.
 
+### Envio real dos códigos de recuperação
+
+O sistema **não considera um código enviado quando o provedor falha**. Configure no Render as variáveis abaixo; não coloque os valores no GitHub.
+
+Para e-mail (exemplo comum com STARTTLS na porta 587):
+
+```text
+SMTP_HOST=servidor-do-provedor
+SMTP_PORT=587
+SMTP_SECURITY=starttls
+SMTP_USER=usuario
+SMTP_PASSWORD=senha-ou-chave-do-aplicativo
+SMTP_FROM=remetente-verificado@seu-dominio
+```
+
+`SMTP_SECURITY` aceita `ssl` (normalmente porta 465), `starttls` (normalmente 587) ou `plain` apenas quando o provedor exigir. Para WhatsApp Cloud API:
+
+```text
+WHATSAPP_ACCESS_TOKEN=token-permanente
+WHATSAPP_PHONE_NUMBER_ID=id-do-numero
+WHATSAPP_TEMPLATE_NAME=nome_do_modelo_aprovado
+WHATSAPP_TEMPLATE_LANGUAGE=pt_BR
+WHATSAPP_GRAPH_VERSION=versao-ativa-da-API
+```
+
+Use em `WHATSAPP_GRAPH_VERSION` uma versão ainda ativa informada no painel/documentação da Meta, incluindo o prefixo `v`; ela não fica fixa no código para evitar interrupções quando uma versão é desativada. O modelo aprovado precisa ter **um parâmetro no corpo**, destinado ao código. O telefone brasileiro é convertido para o formato internacional `55 + DDD + número`. Reinicie o serviço após configurar. A resposta “aceito para processamento” registra apenas a aceitação pelo provedor; entrega efetiva deve ser conferida nos eventos/logs do próprio provedor. Em caso de erro, a tela informa a falha e oferece nova tentativa, limitada a três solicitações em 15 minutos.
+
 ### Migrar o SQLite existente para o Neon
 
 1. Pare o sistema e faça uma cópia de `data\adelinha.db`.
