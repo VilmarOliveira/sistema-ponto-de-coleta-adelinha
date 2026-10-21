@@ -58,9 +58,9 @@ def test_surcharge_requires_reason_and_two_decimal_non_negative_amount():
 
 
 @pytest.mark.parametrize("dimensions,weight,expected", [
-    ((30, 25, 25), 10, ("Pequeno", 5.0)),
-    ((30, 25, 25.01), 10, ("Grande", 10.0)),
-    ((50, 50, 50), 20, ("Grande", 10.0)),
+    ((30, 25, 25), 10, ("Pequeno", 4.9)),
+    ((30, 25, 25.01), 10, ("Grande", 9.9)),
+    ((50, 50, 50), 20, ("Grande", 9.9)),
 ])
 def test_category_boundaries(dimensions, weight, expected):
     assert classify_package(*dimensions, weight) == expected

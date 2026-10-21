@@ -93,8 +93,8 @@ def classify_package(width: float, height: float, length: float, weight: float):
     if dimension_sum > 150 or weight > 20:
         raise ValueError("Limite de 150 cm na soma e 20 kg.")
     if dimension_sum <= 80 and weight <= 10:
-        return "Pequeno", 5.0
-    return "Grande", 10.0
+        return "Pequeno", 4.90
+    return "Grande", 9.90
 
 
 def calculate_fees(base_price, notified_at=None, picked_at=None, today: date | None = None):

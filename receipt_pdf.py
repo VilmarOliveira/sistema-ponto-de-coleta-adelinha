@@ -114,41 +114,34 @@ def build_receipt_pdf(withdrawal, packages, address):
     """Gera o PDF apenas com snapshots persistidos no momento da retirada."""
     output = BytesIO()
     package_id = _display(_value(withdrawal, "package_public_id"))
-    document = _ReceiptCanvas(output, f"Comprovante {package_id}", address)
+    receipt_code = f"CMPPCA-{_value(withdrawal, 'id')}" if _value(withdrawal, "id") else "Não registrado"
+    document = _ReceiptCanvas(output, f"Comprovante {receipt_code}", address)
+    document.line(f"Comprovante: {receipt_code}", bold=True)
     final_total = _value(withdrawal, "final_total")
     if final_total is None:
         final_total = _value(withdrawal, "total_paid")
+    surcharge = _value(withdrawal, "surcharge_amount")
+    discount = _value(withdrawal, "discount_amount")
     fields = (
-        ("Pacote consultado", package_id),
-        ("Cliente", _display(_value(withdrawal, "snapshot_client_name"))),
-        ("ID do cliente", _display(_value(withdrawal, "snapshot_client_public_id"))),
-        ("Retirado por", _display(_value(withdrawal, "receiver_name"))),
-        ("Documento", _document(withdrawal)),
+        ("Rastreio registrado", _display(_value(withdrawal, "snapshot_tracking"))),
+        ("Categoria registrada", _display(_value(withdrawal, "snapshot_category"))),
+        ("Aviso de chegada registrado", _local_datetime(_value(withdrawal, "snapshot_notified_at"))),
+        ("Cliente registrado na retirada", f"{_display(_value(withdrawal, 'snapshot_client_name'))} — {_display(_value(withdrawal, 'snapshot_client_public_id'))}"),
         ("Data e hora", _local_datetime(_value(withdrawal, "picked_at"))),
-        ("Valor do serviço", _display(_value(withdrawal, "service_amount"), True)),
+        ("Quem retirou", _display(_value(withdrawal, "receiver_name"))),
+        ("Documento", _document(withdrawal)),
+        ("Valor base deste pacote", _display(_value(withdrawal, "service_amount"), True)),
         ("Dias de atraso", _display(_value(withdrawal, "late_days"))),
-        ("Taxa extra", _display(_value(withdrawal, "late_amount"), True)),
-        ("Acréscimo manual", _display(_value(withdrawal, "surcharge_amount"), True)),
-        ("Motivo do acréscimo", _display(_value(withdrawal, "surcharge_reason"))),
+        ("Taxa de atraso", _display(_value(withdrawal, "late_amount"), True)),
+        ("Acréscimo manual", _display(surcharge if surcharge is not None else 0, True)),
+        ("Motivo do acréscimo", _display(_value(withdrawal, "surcharge_reason")) if surcharge is None or float(surcharge) > 0 else "Não se aplica"),
+        ("Desconto aplicado", _display(discount if discount is not None else 0, True)),
         ("Total final pago", _display(final_total, True)),
-        ("Forma de pagamento", _display(_value(withdrawal, "payment_method"))),
+        ("Tipo de Pagamento", _display(_value(withdrawal, "payment_method"))),
     )
     for label, value in fields:
         document.line(f"{label}: {value}")
 
-    document.line("Pacotes desta retirada:", bold=True)
-    for item in packages:
-        document.line(
-            f"{_display(_value(item, 'package_public_id'))} | "
-            f"rastreio {_display(_value(item, 'tracking_code'))} | "
-            f"{_display(_value(item, 'package_category'))} | "
-            f"total {_display(_value(item, 'total_amount'), True)}"
-        )
-    document.line(f"TOTAL FINAL DA RETIRADA: {_display(final_total, True)}", bold=True)
-    document.line(
-        "Confirmo que retirei o pacote identificado neste comprovante e que o pagamento informado foi realizado.",
-        bold=True,
-    )
     document.signature(_value(withdrawal, "signature"))
     document.pdf.save()
     output.seek(0)

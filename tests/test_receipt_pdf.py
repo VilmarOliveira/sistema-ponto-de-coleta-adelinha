@@ -52,13 +52,12 @@ def package(number=1, tracking="BR001"):
 def test_pdf_uses_historical_final_total_and_requested_field_order(payment_method):
     content = build_receipt_pdf(withdrawal(payment_method), [package()], "Endereço do ponto").getvalue()
     expected = [
-        b"Pacote consultado: PCT-000001", b"Cliente: Cliente Hist", b"ID do cliente: ADL-000001",
-        b"Retirado por: Pessoa que retirou", b"Documento: CPF 52998224725", b"Data e hora:",
-        b"Valor do servi", b"Dias de atraso: 2", b"Taxa extra: R$ 1,00",
-        b"Acr", b"Motivo do acr",
-        b"Total final pago: R$ 6,00", f"Forma de pagamento: {payment_method}".encode(),
-        b"Pacotes desta retirada:", b"TOTAL FINAL DA RETIRADA: R$ 6,00",
-        b"Confirmo que retirei o pacote identificado neste comprovante",
+        b"Comprovante: CMPPCA-", b"Rastreio registrado:", b"Categoria registrada:",
+        b"Aviso de chegada registrado:", b"Cliente registrado na retirada:", b"Data e hora:",
+        b"Quem retirou: Pessoa que retirou", b"Documento: CPF 52998224725",
+        b"Valor base deste pacote:", b"Dias de atraso: 2", b"Taxa de atraso: R$ 1,00",
+        b"Acr", b"Motivo do acr", b"Desconto aplicado:", b"Total final pago: R$ 6,00",
+        f"Tipo de Pagamento: {payment_method}".encode(),
     ]
     # ReportLab preserva as palavras ASCII no stream não comprimido; caracteres
     # acentuados usam a codificação da fonte e são cobertos pelos testes HTTP existentes.
@@ -78,5 +77,4 @@ def test_pdf_wraps_long_text_and_adds_pages_without_losing_packages():
 
     assert len(re.findall(rb"/Type /Page\b", content)) >= 2
     assert b"PCT-000001" in content
-    assert b"PCT-000060" in content
-    assert b"TOTAL FINAL DA RETIRADA: R$ 6,00" in content
+    assert b"Total final pago: R$ 6,00" in content

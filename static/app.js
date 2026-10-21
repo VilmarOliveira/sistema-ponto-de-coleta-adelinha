@@ -400,3 +400,10 @@ if (pickupForm) {
     }));
   });
 }
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/static/sw.js');
+let reconnectNotice;
+window.addEventListener('offline',()=>{reconnectNotice=document.createElement('div');reconnectNotice.className='flash warning reconnect';reconnectNotice.textContent='Reconectando ao sistema…';document.body.prepend(reconnectNotice)});
+window.addEventListener('online',()=>{if(reconnectNotice)reconnectNotice.remove()});
+window.addEventListener('beforeunload',()=>sessionStorage.setItem('adelinha-scroll',String(scrollY)));
+window.addEventListener('pageshow',()=>{const y=Number(sessionStorage.getItem('adelinha-scroll'));if(y)scrollTo(0,y)});
+document.querySelector('#send-registration-code')?.addEventListener('click',async()=>{const form=document.querySelector('#registration-form'),status=document.querySelector('#registration-code-status');status.textContent='Enviando código…';try{const response=await fetch('/cadastro/enviar-codigo',{method:'POST',body:new FormData(form),headers:{'X-Requested-With':'fetch'}});const data=await response.json();status.textContent=data.message||data.error}catch(_){status.textContent='Não foi possível enviar. Confira a conexão e tente novamente.'}});

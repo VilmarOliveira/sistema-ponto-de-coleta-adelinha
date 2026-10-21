@@ -11,7 +11,8 @@ from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 
-from flask import Flask, abort, flash, redirect, render_template, request, send_file, session, url_for
+from flask import Flask, abort, flash, redirect, render_template, request, send_file, session, url_for, Response
+from markupsafe import escape
 import qrcode
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -21,13 +22,18 @@ from core import (
 )
 from database import DatabaseConnection, DatabaseIntegrityError, is_postgres
 from receipt_pdf import build_receipt_pdf
+from notifications import send_code
+from contract import CONTRACT_TEXT, CONTRACT_VERSION
+from contract_pdf import build_contract_pdf
 
 ROOT = Path(__file__).parent
-TERMS_VERSION = "MINUTA-TESTE-v1"
+TERMS_VERSION = CONTRACT_VERSION
 PIX_KEY = "38145273000105"
 PIX_RECEIVER_NAME = "AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS"
 # O CEP não é exibido aqui porque não foi confirmado para o endereço de retirada.
 PICKUP_ADDRESS = "RUA AFONSO BORGES DE FREITAS, 795, JARDIM ADELINHA, FRANCA – SP"
+PICKUP_CEP = os.environ.get("PICKUP_CEP", "14406-848")
+PRIVACY_CONTACT = os.environ.get("PRIVACY_CONTACT", "(16) 98800-4966")
 ADDRESS = PICKUP_ADDRESS  # compatibilidade com comprovantes e integrações existentes
 CLIENT_COLUMNS = "id,public_id,name,cpf,phone,email,terms_version,terms_text,signature,accepted_at,active,session_version,residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement"
 PACKAGE_COLUMNS = "id,public_id,client_id,tracking,width,height,length,weight,shelf,category,base_price,status,created_at,notified_at,picked_at"
@@ -38,13 +44,10 @@ PICKUP_COLUMNS_PU = ",".join(f"pu.{column}" for column in PICKUP_COLUMNS.split("
 
 
 def terms_text():
-    return """CONDIÇÕES DO SERVIÇO — MINUTA-TESTE-v1
-1. Cadastro e identificação: o cliente informa nome, CPF e WhatsApp e recebe um ID único.
-2. Pacotes: pequeno, soma até 80 cm e peso até 10 kg, R$ 5,00; grande, soma até 150 cm e peso até 20 kg, R$ 10,00. Acima dos limites não será recebido.
-3. Aviso e prazo: o prazo começa após confirmação do aviso. São 4 dias corridos, contando o aviso como primeiro dia. Desde o quinto dia, R$ 0,50 por dia corrido e pacote, inclusive dias fechados. Reenvio não reinicia o prazo.
-4. Pagamento e retirada: Pix com conferência manual. Titular ou terceiro com documento próprio pode retirar. Nome, documento e assinatura são registrados. Pode haver retirada parcial.
-5. Privacidade: cadastro, aceite, pagamento e retirada são mantidos para operar e comprovar o serviço.
-MINUTA PENDENTE DE REVISÃO. Não há nesta versão regra sobre abandono, descarte, indenização ou responsabilidade."""
+    return CONTRACT_TEXT.replace(
+        "inscrita no CNPJ e situada no endereço e CEP informados nas configurações administrativas e exibidos neste documento",
+        f"inscrita no CNPJ 38.145.273/0001-05 e situada na Rua Afonso Borges de Freitas, nº 795, Jardim Adelinha, Franca – SP, CEP {PICKUP_CEP}",
+    ).replace("canal de privacidade exibido no documento", f"canal de privacidade {PRIVACY_CONTACT}")
 
 
 def create_app(test_config=None):
@@ -53,6 +56,7 @@ def create_app(test_config=None):
         SECRET_KEY=os.environ.get("SECRET_KEY", secrets.token_hex(32)),
         DATABASE=os.environ.get("DATABASE_URL") or os.environ.get("DATABASE", str(ROOT / "data" / "adelinha.db")),
         STAFF_USER=os.environ.get("STAFF_USER", "admin"),
+        STAFF_NAME=os.environ.get("STAFF_NAME", "Administrador"),
         STAFF_PASSWORD_HASH=os.environ.get("STAFF_PASSWORD_HASH", generate_password_hash("adelinha-teste")),
         PASSWORD_LINK_MINUTES=30,
         LOGIN_LIMIT=5,
@@ -113,8 +117,13 @@ def create_app(test_config=None):
 
     @app.context_processor
     def shared_values():
+        client_name = None
+        if session.get("client_id"):
+            row = db().execute("SELECT name FROM clients WHERE id=?", (session["client_id"],)).fetchone()
+            client_name = row["name"] if row else None
         return {"csrf_token": session.get("csrf_token"), "address": PICKUP_ADDRESS,
-                "pickup_address": PICKUP_ADDRESS, "pix_receiver_name_full": PIX_RECEIVER_NAME}
+                "pickup_address": PICKUP_ADDRESS, "pix_receiver_name_full": PIX_RECEIVER_NAME,
+                "logged_name": app.config["STAFF_NAME"] if session.get("staff") else client_name}
 
     @app.template_filter("local_datetime")
     def local_datetime(value):
@@ -155,7 +164,7 @@ def create_app(test_config=None):
         parsed = parseaddr(value)[1]
         return parsed == value and len(value) <= 254 and bool(re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value))
 
-    def validate_package_form():
+    def validate_package_form(exclude_package_id=None):
         data = package_form_data()
         tracking, shelf = data["tracking"].strip(), data["shelf"].strip()
         if not tracking or not shelf or not re.fullmatch(r"[A-Za-z0-9]+", tracking) or not re.fullmatch(r"[A-Za-z0-9]+", shelf):
@@ -170,6 +179,10 @@ def create_app(test_config=None):
         client = db().execute("SELECT id,name,public_id FROM clients WHERE id=? AND active=1", (client_id,)).fetchone()
         if not client:
             raise ValueError("Selecione um cliente válido e ativo.")
+        duplicate = db().execute("SELECT id FROM packages WHERE UPPER(tracking)=UPPER(?) AND id!=? LIMIT 1",
+                                 (tracking, exclude_package_id or 0)).fetchone()
+        if duplicate:
+            raise ValueError("Este código de rastreio já está cadastrado. Confira o pacote existente.")
         width, height, length, weight = numbers
         category, price = classify_package(width, height, length, weight)
         return data, client, (width, height, length, weight), category, price
@@ -206,6 +219,98 @@ def create_app(test_config=None):
     def index():
         return render_template("index.html")
 
+    @app.get("/duvidas-frequentes")
+    def faq():
+        return render_template("faq.html")
+
+    @app.get("/identidade/cabecalho")
+    def header_identity():
+        setting = db().execute("SELECT header_image,header_image_mime FROM settings WHERE id=1").fetchone()
+        if setting and setting["header_image"]:
+            return Response(bytes(setting["header_image"]), mimetype=setting["header_image_mime"], headers={"Cache-Control": "public, max-age=3600"})
+        return redirect(url_for("static", filename="logo-adelinha.svg"))
+
+    @app.route("/painel/configuracoes/identidade", methods=["GET", "POST"])
+    @login_required
+    def visual_identity():
+        if request.method == "POST":
+            if request.form.get("restore") == "yes":
+                db().execute("UPDATE settings SET header_image=NULL,header_image_mime=NULL WHERE id=1")
+            else:
+                upload = request.files.get("image")
+                data = upload.read(5 * 1024 * 1024 + 1) if upload else b""
+                signatures = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"), (b"RIFF", "image/webp"))
+                mime = next((kind for magic, kind in signatures if data.startswith(magic) and (kind != "image/webp" or data[8:12] == b"WEBP")), None)
+                if not data or len(data) > 5 * 1024 * 1024 or not mime:
+                    flash("Envie uma imagem PNG, JPG ou WebP de até 5 MB.", "error")
+                    return render_template("visual_identity.html"), 400
+                db().execute("UPDATE settings SET header_image=?,header_image_mime=? WHERE id=1", (data, mime))
+            db().commit()
+            flash("Identidade visual alterada com sucesso!", "success")
+            return redirect(url_for("visual_identity"))
+        return render_template("visual_identity.html")
+
+    @app.get("/blog")
+    def blog():
+        posts = db().execute("SELECT slug,title,summary,cover_image,cover_alt,published_at,updated_at FROM blog_posts WHERE status='published' ORDER BY published_at DESC LIMIT 30").fetchall()
+        return render_template("blog.html", posts=posts)
+
+    @app.get("/blog/<slug>")
+    def blog_post(slug):
+        post = db().execute("SELECT slug,title,summary,body,cover_image,cover_alt,seo_title,seo_description,published_at,updated_at FROM blog_posts WHERE slug=? AND status='published'", (slug,)).fetchone()
+        if not post: abort(404)
+        return render_template("blog_post.html", post=post)
+
+    @app.get("/blog/<slug>/capa")
+    def blog_cover(slug):
+        post = db().execute("SELECT cover_image FROM blog_posts WHERE slug=? AND status='published'", (slug,)).fetchone()
+        if not post or not post["cover_image"]: abort(404)
+        data = bytes(post["cover_image"])
+        mime = "image/png" if data.startswith(b"\x89PNG") else ("image/webp" if data.startswith(b"RIFF") else "image/jpeg")
+        return Response(data, mimetype=mime, headers={"Cache-Control":"public, max-age=86400"})
+
+    @app.route("/painel/blog", methods=["GET", "POST"])
+    @login_required
+    def blog_admin():
+        if request.method == "POST":
+            title, slug = request.form.get("title", "").strip(), request.form.get("slug", "").strip().lower()
+            slug = re.sub(r"[^a-z0-9-]", "", slug)
+            status = "published" if request.form.get("action") == "publish" else "draft"
+            if not title or not slug:
+                flash("Título e endereço do artigo são obrigatórios.", "error")
+            else:
+                now_value = now().isoformat()
+                body = str(escape(request.form.get("body", "")))
+                upload = request.files.get("cover_image"); cover = upload.read(5*1024*1024+1) if upload and upload.filename else None
+                if cover and (len(cover)>5*1024*1024 or not (cover.startswith(b"\x89PNG") or cover.startswith(b"\xff\xd8\xff") or (cover.startswith(b"RIFF") and cover[8:12]==b"WEBP"))):
+                    flash("A capa deve ser PNG, JPG ou WebP de até 5 MB.", "error"); return redirect(url_for("blog_admin"))
+                db().execute("""INSERT INTO blog_posts(slug,title,summary,body,cover_image,cover_alt,seo_title,seo_description,status,published_at,updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(slug) DO UPDATE SET title=excluded.title,summary=excluded.summary,body=excluded.body,cover_image=COALESCE(excluded.cover_image,blog_posts.cover_image),
+                    cover_alt=excluded.cover_alt,seo_title=excluded.seo_title,seo_description=excluded.seo_description,status=excluded.status,
+                    published_at=COALESCE(blog_posts.published_at,excluded.published_at),updated_at=excluded.updated_at""",
+                    (slug,title,request.form.get("summary","").strip(),body,cover,request.form.get("cover_alt","").strip(),request.form.get("seo_title","").strip(),request.form.get("seo_description","").strip(),status,now_value if status=="published" else None,now_value))
+                db().commit(); flash("Artigo salvo com sucesso!", "success")
+                return redirect(url_for("blog_admin"))
+        posts = db().execute("SELECT id,slug,title,status,updated_at FROM blog_posts ORDER BY updated_at DESC LIMIT 50").fetchall()
+        edit = db().execute("SELECT slug,title,summary,body,cover_alt,seo_title,seo_description,status FROM blog_posts WHERE id=?", (request.args.get("edit"),)).fetchone() if request.args.get("edit") else None
+        return render_template("blog_admin.html", posts=posts, edit=edit)
+
+    @app.post("/painel/blog/<int:post_id>/despublicar")
+    @login_required
+    def blog_unpublish(post_id):
+        db().execute("UPDATE blog_posts SET status='draft',updated_at=? WHERE id=?", (now().isoformat(), post_id)); db().commit()
+        flash("Artigo retirado da publicação.", "success"); return redirect(url_for("blog_admin"))
+
+    @app.get("/robots.txt")
+    def robots():
+        return Response(f"User-agent: *\nDisallow: /painel\nDisallow: /cliente\nSitemap: {url_for('sitemap', _external=True)}\n", mimetype="text/plain")
+
+    @app.get("/sitemap.xml")
+    def sitemap():
+        posts = db().execute("SELECT slug,updated_at FROM blog_posts WHERE status='published' ORDER BY id LIMIT 1000").fetchall()
+        urls = [url_for("index", _external=True), url_for("faq", _external=True), url_for("blog", _external=True)] + [url_for("blog_post", slug=p["slug"], _external=True) for p in posts]
+        return Response('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join(f'<url><loc>{escape(u)}</loc></url>' for u in urls) + '</urlset>', mimetype="application/xml")
+
     @app.get("/health")
     def health():
         """Endpoint simples usado pela hospedagem para confirmar que o app iniciou."""
@@ -221,6 +326,14 @@ def create_app(test_config=None):
         signature = request.form.get("signature", "")
         password = request.form.get("password", "")
         residential = residential_address_form()
+        confirmation = session.get("registration_confirmation")
+        submitted_code = request.form.get("confirmation_code", "")
+        confirmed = bool(confirmation and confirmation.get("cpf") == cpf and confirmation.get("version") == TERMS_VERSION
+            and datetime.fromisoformat(confirmation["expires_at"]) > now()
+            and secrets.compare_digest(confirmation["code_hash"], hashlib.sha256(submitted_code.encode()).hexdigest()))
+        if not app.config.get("TESTING") and not confirmed:
+            flash("Confirme o código enviado ao WhatsApp ou e-mail antes de concluir.", "error")
+            return render_template("index.html", registration_form={**request.form}), 400
         if request.form.get("terms_accept") != "yes":
             flash("É necessário aceitar as condições do serviço.", "error")
             return redirect(url_for("index") + "#cadastro")
@@ -245,10 +358,34 @@ def create_app(test_config=None):
              residential["residential_complement"] or None, email or None),
         )
         client_id = cur.fetchone()["id"]
-        public_id = f"ADL-{client_id:06d}"
+        public_id = f"CLTPCA-{client_id}"
         db().execute("UPDATE clients SET public_id=? WHERE id=?", (public_id, client_id))
+        integrity = hashlib.sha256((public_id + name + cpf + terms_text() + signature + accepted_at).encode()).hexdigest()
+        db().execute("UPDATE clients SET contract_id=?,contract_hash=?,confirmation_channel=?,confirmation_destination=?,confirmation_validated_at=?,accept_ip=?,accept_user_agent=? WHERE id=?",
+            (f"CTRPCA-{client_id}", integrity, confirmation.get("channel") if confirmation else "teste",
+             confirmation.get("destination") if confirmation else None, accepted_at,
+             request.headers.get("X-Forwarded-For", request.remote_addr), request.headers.get("User-Agent", "")[:500], client_id))
         db().commit()
+        session.pop("registration_confirmation", None)
         return render_template("success.html", name=name, public_id=public_id, address=ADDRESS)
+
+    @app.post("/cadastro/enviar-codigo")
+    def registration_code():
+        cpf, channel = digits(request.form.get("cpf", "")), request.form.get("confirmation_channel")
+        destination = request.form.get("email", "").strip().lower() if channel == "email" else digits(request.form.get("phone", ""))
+        previous = session.get("registration_confirmation", {})
+        if previous.get("sends", 0) >= 3:
+            return {"error": "Limite de reenvios atingido. Aguarde e tente novamente."}, 429
+        if not valid_cpf(cpf) or channel not in ("email", "whatsapp") or not destination:
+            return {"error": "Confira CPF, canal e contato cadastrado."}, 400
+        code = f"{secrets.randbelow(1000000):06d}"
+        try: sent, detail = send_code(channel, destination, code)
+        except Exception: sent, detail = False, "Falha no provedor"
+        if not sent: return {"error": f"Envio indisponível: {detail}."}, 503
+        session["registration_confirmation"] = {"cpf":cpf,"version":TERMS_VERSION,"channel":channel,
+            "destination":destination,"code_hash":hashlib.sha256(code.encode()).hexdigest(),
+            "expires_at":(now()+timedelta(minutes=10)).isoformat(),"sends":previous.get("sends",0)+1}
+        return {"message":"Código enviado. Ele expira em 10 minutos."}
 
     @app.get("/condicoes")
     def terms():
@@ -279,6 +416,45 @@ def create_app(test_config=None):
     @app.get("/cliente/login")
     def client_login():
         return render_template("client_login.html")
+
+    @app.route("/cliente/recuperar-senha", methods=["GET", "POST"])
+    def password_recovery():
+        if request.method == "GET":
+            return render_template("password_recovery.html", stage="request")
+        stage = request.form.get("stage")
+        if stage == "request":
+            cpf, channel = digits(request.form.get("cpf", "")), request.form.get("channel")
+            client = db().execute("SELECT id,phone,email FROM clients WHERE REPLACE(REPLACE(REPLACE(cpf,'.',''),'-',''),' ','')=? AND active=1", (cpf,)).fetchone()
+            if client and channel in ("email", "whatsapp"):
+                destination = client["email"] if channel == "email" else client["phone"]
+                if destination:
+                    code = f"{secrets.randbelow(1000000):06d}"
+                    code_hash = hashlib.sha256(code.encode()).hexdigest()
+                    expires = (now() + timedelta(minutes=10)).isoformat()
+                    db().execute("UPDATE verification_codes SET used_at=? WHERE client_id=? AND purpose='password_recovery' AND used_at IS NULL", (now().isoformat(), client["id"]))
+                    cur = db().execute("INSERT INTO verification_codes(client_id,purpose,channel,destination,code_hash,expires_at,attempts,sends,created_at) VALUES(?,?,?,?,?,?,0,1,?) RETURNING id",
+                        (client["id"], "password_recovery", channel, destination, code_hash, expires, now().isoformat()))
+                    verification_id = cur.fetchone()["id"]; db().commit()
+                    try:
+                        sent, detail = send_code(channel, destination, code)
+                    except Exception as error:
+                        sent, detail = False, type(error).__name__
+                    db().execute("UPDATE verification_codes SET provider_status=? WHERE id=?", (detail, verification_id)); db().commit()
+                    if sent: session["password_recovery_id"] = verification_id
+            flash("Se os dados estiverem corretos, enviaremos as instruções ao contato cadastrado.", "success")
+            return render_template("password_recovery.html", stage="confirm")
+        verification_id = session.get("password_recovery_id")
+        row = db().execute("SELECT id,client_id,code_hash,expires_at,attempts,used_at FROM verification_codes WHERE id=? AND purpose='password_recovery'", (verification_id,)).fetchone() if verification_id else None
+        password = request.form.get("password", "")
+        valid = bool(row and not row["used_at"] and row["attempts"] < 5 and datetime.fromisoformat(row["expires_at"]) > now() and secrets.compare_digest(row["code_hash"], hashlib.sha256(request.form.get("code", "").encode()).hexdigest()))
+        if not valid or len(password) < 8 or password != request.form.get("password_confirm"):
+            if row: db().execute("UPDATE verification_codes SET attempts=attempts+1 WHERE id=?", (row["id"],)); db().commit()
+            flash("Código inválido ou expirado, ou as senhas não conferem.", "error")
+            return render_template("password_recovery.html", stage="confirm"), 400
+        db().execute("UPDATE clients SET password_hash=?,session_version=session_version+1 WHERE id=?", (generate_password_hash(password), row["client_id"]))
+        db().execute("UPDATE verification_codes SET used_at=? WHERE id=?", (now().isoformat(), row["id"])); db().commit()
+        session.pop("password_recovery_id", None); flash("Senha alterada com sucesso!", "success")
+        return redirect(url_for("client_login"))
 
     @app.post("/cliente/login")
     def client_login_post():
@@ -316,6 +492,9 @@ def create_app(test_config=None):
             if package["status"] != "retirado":
                 item = {**dict(package), **fees(package)}
                 item["deadline"] = (datetime.fromisoformat(package["notified_at"]).astimezone(TZ).date() + timedelta(days=3)).strftime("%d/%m/%Y") if package["notified_at"] else None
+                if package["notified_at"]:
+                    day = (now().date() - datetime.fromisoformat(package["notified_at"]).astimezone(TZ).date()).days + 1
+                    item["deadline_alert"] = "ending" if day in (3, 4) else ("late" if day >= 5 else None)
                 pending.append(item)
         return render_template("client_area.html", client=client, pending=pending, packages=packages, page=page, has_next=has_next)
 
@@ -341,6 +520,12 @@ def create_app(test_config=None):
         db().commit()
         flash("Dados atualizados com sucesso", "success")
         return redirect(url_for("client_area"))
+
+    @app.get("/cliente/contrato-assinado.pdf")
+    @client_login_required
+    def client_contract_pdf():
+        client = db().execute(f"SELECT {CLIENT_COLUMNS} FROM clients WHERE id=?", (session["client_id"],)).fetchone()
+        return send_file(build_contract_pdf(client), mimetype="application/pdf", as_attachment=True, download_name=f"contrato-{client['public_id']}.pdf")
 
     @app.get("/cliente/condicoes-aceitas")
     @client_login_required
@@ -380,9 +565,19 @@ def create_app(test_config=None):
         # também protege a interface caso uma futura consulta ganhe outro JOIN.
         packages = {package["id"]: package for package in package_rows}.values()
         rows = [{**dict(package), **fees(package)} for package in packages]
+        alerts = {"today": [], "late": [], "expired": []}
+        alert_rows = db().execute(f"""SELECT {PACKAGE_COLUMNS_P},c.name client_name,c.phone FROM packages p JOIN clients c ON c.id=p.client_id
+            WHERE p.status='aguardando_retirada' AND p.notified_at IS NOT NULL ORDER BY p.notified_at LIMIT 200""").fetchall()
+        for package in alert_rows:
+            item = {**dict(package), **fees(package)}
+            day = (now().date() - datetime.fromisoformat(package["notified_at"]).astimezone(TZ).date()).days + 1
+            item["deadline"] = (datetime.fromisoformat(package["notified_at"]).astimezone(TZ).date() + timedelta(days=3)).strftime("%d/%m/%Y")
+            if day == 4: alerts["today"].append(item)
+            elif 5 <= day <= 10: alerts["late"].append(item)
+            elif day >= 11: alerts["expired"].append(item)
         package_form = session.pop("package_form", {})
         settings = db().execute("SELECT pix_receiver_name FROM settings WHERE id=1").fetchone()
-        return render_template("dashboard.html", clients=clients, packages=rows, q=query, pix=PIX_KEY, package_form=package_form, pix_receiver_name=settings["pix_receiver_name"], page=page, has_next=has_next)
+        return render_template("dashboard.html", clients=clients, packages=rows, alerts=alerts, q=query, pix=PIX_KEY, package_form=package_form, pix_receiver_name=settings["pix_receiver_name"], page=page, has_next=has_next)
 
     @app.get("/painel/clientes/busca")
     @login_required
@@ -568,10 +763,17 @@ def create_app(test_config=None):
             flash(message, "error")
             return redirect(url_for("dashboard") + "#novo-pacote")
         width, height, length, weight = numbers
-        cur = db().execute("""INSERT INTO packages(client_id, tracking, width, height, length, weight, shelf, category, base_price, status, created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,'aguardando_aviso',?) RETURNING id""", (selected_client["id"], data["tracking"].strip(), width, height, length, weight, data["shelf"].strip(), category, price, now().isoformat()))
+        try:
+            cur = db().execute("""INSERT INTO packages(client_id, tracking, width, height, length, weight, shelf, category, base_price, status, created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,'aguardando_aviso',?) RETURNING id""", (selected_client["id"], data["tracking"].strip(), width, height, length, weight, data["shelf"].strip(), category, price, now().isoformat()))
+        except DatabaseIntegrityError:
+            db().rollback()
+            data["has_error"] = True
+            session["package_form"] = data
+            flash("Este código de rastreio já está cadastrado. Confira o pacote existente.", "error")
+            return redirect(url_for("dashboard") + "#novo-pacote")
         new_package_id = cur.fetchone()["id"]
-        package_id = f"PCT-{new_package_id:06d}"
+        package_id = f"PCTPCA-{new_package_id}"
         db().execute("UPDATE packages SET public_id=? WHERE id=?", (package_id, new_package_id))
         audit("criar", "pacote", new_package_id, package_id)
         db().commit()
@@ -590,7 +792,7 @@ def create_app(test_config=None):
         form_data = session.pop(f"edit_package_{package_id}", None)
         if request.method == "POST":
             try:
-                data, selected_client, numbers, category, price = validate_package_form()
+                data, selected_client, numbers, category, price = validate_package_form(package_id)
             except ValueError as error:
                 saved_form = package_form_data()
                 saved_form["has_error"] = True
@@ -787,8 +989,8 @@ def create_app(test_config=None):
         pickup = db().execute(f"SELECT {PICKUP_COLUMNS} FROM pickups WHERE id=?", (pickup_id,)).fetchone()
         if not pickup:
             abort(404)
-        packages = db().execute("SELECT p.id package_id,p.public_id, pp.base_amount, pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=?", (pickup_id,)).fetchall()
-        return render_template("receipt.html", pickup=pickup, packages=packages, pix=PIX_KEY)
+        package = db().execute("SELECT package_id FROM pickup_packages WHERE pickup_id=? ORDER BY package_id LIMIT 1", (pickup_id,)).fetchone()
+        return redirect(url_for("package_detail", package_id=package["package_id"]))
 
     @app.get("/comprovantes/<int:pickup_id>/pacotes/<int:package_id>.pdf")
     def receipt_pdf(pickup_id, package_id):
@@ -836,8 +1038,11 @@ def init_db(database):
         f"CREATE TABLE IF NOT EXISTS login_attempts (id {id_type}, kind TEXT NOT NULL, identifier TEXT NOT NULL, succeeded INTEGER NOT NULL, attempted_at TEXT NOT NULL)",
         "CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts(kind,identifier,attempted_at)",
         f"CREATE TABLE IF NOT EXISTS audit_logs (id {id_type}, actor TEXT NOT NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id BIGINT, details TEXT, created_at TEXT NOT NULL)",
-        "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), pix_receiver_name TEXT)",
+        "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), pix_receiver_name TEXT, header_image BYTEA, header_image_mime TEXT)",
         "INSERT INTO settings(id,pix_receiver_name) VALUES(1,'AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS') ON CONFLICT(id) DO NOTHING",
+        f"CREATE TABLE IF NOT EXISTS blog_posts (id {id_type}, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL, summary TEXT, body TEXT NOT NULL, cover_image BYTEA, cover_alt TEXT, seo_title TEXT, seo_description TEXT, status TEXT NOT NULL DEFAULT 'draft', published_at TEXT, updated_at TEXT NOT NULL)",
+        f"CREATE TABLE IF NOT EXISTS verification_codes (id {id_type}, client_id BIGINT NOT NULL REFERENCES clients(id), purpose TEXT NOT NULL, channel TEXT NOT NULL, destination TEXT NOT NULL, code_hash TEXT NOT NULL, expires_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, sends INTEGER NOT NULL DEFAULT 1, provider_status TEXT, created_at TEXT NOT NULL, used_at TEXT)",
+        f"CREATE TABLE IF NOT EXISTS reminder_logs (id {id_type}, package_id BIGINT NOT NULL REFERENCES packages(id), channel TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL)",
     ]
     for statement in statements:
         connection.execute(statement)
@@ -849,7 +1054,9 @@ def init_db(database):
     ensure_columns(connection, "clients", {"active": "INTEGER NOT NULL DEFAULT 1", "session_version": "INTEGER NOT NULL DEFAULT 1",
         "residential_cep": "TEXT", "residential_street": "TEXT", "residential_number": "TEXT",
         "residential_district": "TEXT", "residential_city": "TEXT", "residential_state": "TEXT",
-        "residential_complement": "TEXT", "email": "TEXT"})
+        "residential_complement": "TEXT", "email": "TEXT", "contract_id": "TEXT", "contract_hash": "TEXT",
+        "confirmation_channel": "TEXT", "confirmation_destination": "TEXT", "confirmation_validated_at": "TEXT",
+        "accept_ip": "TEXT", "accept_user_agent": "TEXT"})
     ensure_columns(connection, "pickups", {"payment_method": "TEXT", "document_type": "TEXT", "payment_confirmed_at": "TEXT", "payment_confirmed_by": "TEXT",
         "discount_type": "TEXT", "discount_input": "REAL", "discount_amount": "REAL", "original_total": "REAL",
         "final_total": "REAL", "discount_applied_by": "TEXT", "surcharge_amount": "REAL", "surcharge_reason": "TEXT",
@@ -859,6 +1066,23 @@ def init_db(database):
         "tracking_code": "TEXT", "package_category": "TEXT", "notified_at": "TEXT",
         "service_amount": "REAL", "late_days": "INTEGER", "total_amount": "REAL",
     })
+    ensure_columns(connection, "settings", {"header_image": "BYTEA" if connection.postgres else "BLOB", "header_image_mime": "TEXT"})
+    ensure_columns(connection, "packages", {"reminder_sent_at": "TEXT", "forwarded_at": "TEXT"})
+    duplicate_tracking = connection.execute("""SELECT 1 FROM packages WHERE tracking IS NOT NULL AND trim(tracking)!=''
+        GROUP BY UPPER(trim(tracking)) HAVING COUNT(*)>1 LIMIT 1""").fetchone()
+    if not duplicate_tracking:
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_packages_tracking ON packages(UPPER(trim(tracking)))")
+    initial_posts = [
+        ("receber-compras-online-em-franca", "Como receber compras online em Franca sem estar em casa", "Conheça uma alternativa para receber encomendas fora de casa.", "O Guarda Aqui Adelinha recebe e armazena seus pacotes para retirada no Jardim Adelinha. Cadastre-se, use seu nome e código na compra e aguarde o aviso de chegada."),
+        ("como-funciona-guarda-aqui-adelinha", "Como funciona o Guarda Aqui da Adelinha", "Cadastro, aviso, prazo e retirada explicados.", "Após o cadastro e assinatura do contrato, use o endereço do ponto e seu código. Pacotes pequenos custam R$ 4,90 e grandes R$ 9,90. O prazo sem adicional é de quatro dias corridos."),
+        ("endereco-para-receber-compras-adelinha", "Qual endereço usar para receber suas compras na Adelinha", "Veja como identificar corretamente sua entrega.", "Use Rua Afonso Borges de Freitas, 795, Jardim Adelinha, Franca – SP, com o CEP exibido no sistema, além do seu nome completo e código de cliente."),
+        ("quanto-custa-guardar-encomenda", "Quanto custa receber e guardar uma encomenda", "Entenda valores, limites e atraso.", "Pequeno: soma até 80 cm e 10 kg, R$ 4,90. Grande: soma até 150 cm e 20 kg, R$ 9,90. Desde o quinto dia há R$ 0,50 por dia e pacote."),
+        ("retirada-de-pacotes-por-outra-pessoa", "Como funciona a retirada de pacotes por outra pessoa", "Documentos e autorização para retirada por terceiro.", "Outra pessoa pode retirar com autorização verificável do titular, documento oficial próprio com foto e assinatura no comprovante de retirada."),
+    ]
+    published = datetime.now(TZ).isoformat()
+    for slug, title, summary, body in initial_posts:
+        connection.execute("INSERT INTO blog_posts(slug,title,summary,body,cover_alt,seo_title,seo_description,status,published_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(slug) DO NOTHING",
+            (slug,title,summary,body,"",title,summary,"published",published,published))
     # O nome completo é mostrado na interface; pix_payload aplica o limite EMV de 25 caracteres.
     connection.execute("UPDATE settings SET pix_receiver_name=? WHERE id=1", (PIX_RECEIVER_NAME,))
     connection.commit()

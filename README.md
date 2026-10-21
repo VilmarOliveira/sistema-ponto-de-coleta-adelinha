@@ -10,7 +10,7 @@ O endereço acima corresponde ao serviço `ponto-coleta-adelinha-teste` configur
 
 Para confirmar que a atualização entrou no ar, abra também o [health check da prévia](https://ponto-coleta-adelinha-teste.onrender.com/health). Ele deve mostrar `{"status":"ok"}`. Se o Render estiver configurado para exigir autenticação de acesso à prévia, entre primeiro com a conta autorizada no painel do Render.
 
-> **Atenção:** esta versão usa dados e credenciais de demonstração. A minuta deve ser revisada e a segurança operacional validada antes de atender clientes reais.
+> **Atenção:** esta versão usa dados e credenciais de demonstração. O contrato deve ser revisado por profissional jurídico e a segurança operacional validada antes de atender clientes reais.
 
 ## 1. Executar localmente (passo a passo)
 
@@ -120,7 +120,7 @@ Essa URL é uma **versão de teste**. Não cadastre CPFs ou documentos reais at�
 6. **WhatsApp**: nesta versão o envio é manual pelo link `wa.me`, sem API paga.
 7. **Pix**: conta bancária empresarial apta a receber pela chave CNPJ. Eventuais tarifas dependem do banco.
 
-Antes da produção: revise a minuta com profissional jurídico/LGPD, troque as credenciais, restrinja quem acessa o painel, configure HTTPS, backups e política de retenção, e faça teste de restauração. CPF, documentos e assinaturas nunca são mostrados na área pública; por conter dados pessoais, o banco e seus backups devem ter acesso rigorosamente limitado.
+Antes da produção: revise o contrato com profissional jurídico/LGPD, troque as credenciais, restrinja quem acessa o painel, configure HTTPS, backups e política de retenção, e faça teste de restauração. CPF, documentos e assinaturas nunca são mostrados na área pública; por conter dados pessoais, o banco e seus backups devem ter acesso rigorosamente limitado.
 
 ## Atualizar no Windows sem perder dados
 
@@ -158,7 +158,7 @@ A inicialização acrescenta, sem apagar tabelas, os campos de cliente ativo e v
 
 ## Regras implementadas
 
-- ID de cliente `ADL-000001` e pacote `PCT-000001` sequenciais.
+- IDs novos de cliente `CLTPCA-1` e pacote `PCTPCA-1`, mantendo o reconhecimento dos códigos históricos.
 - CPF aceito com ou sem pontuação, validado pelos dígitos verificadores e bloqueado quando já pertence a outro cadastro.
 - Aceite guarda versão, assinatura e data/hora em `America/Sao_Paulo`.
 - Pequeno: soma ≤ 80 cm **e** peso ≤ 10 kg; grande: soma ≤ 150 cm **e** peso ≤ 20 kg; acima disso é recusado.
@@ -182,3 +182,13 @@ O atendente pode informar um acréscimo monetário não negativo com até duas c
 O workflow `.github/workflows/tests.yml` executa a suíte em cada Pull Request. Ele usa SQLite temporário para os testes funcionais e inicia um PostgreSQL 16 isolado para o teste de compatibilidade. Não utiliza `DATABASE_URL`, dados ou credenciais do Neon de produção e não exige segredo adicional no GitHub.
 
 O Render continua usando somente a variável `DATABASE_URL` configurada no painel do serviço. Não altere essa variável e nunca copie sua conexão para arquivos do projeto, logs ou Pull Requests.
+
+## Integrações externas da versão consolidada
+
+A confirmação real de códigos exige `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` e `SMTP_FROM` para e-mail, ou `WHATSAPP_ACCESS_TOKEN` e `WHATSAPP_PHONE_NUMBER_ID` para WhatsApp Cloud API. Sem elas o sistema informa indisponibilidade e nunca simula validação. Configure também `STAFF_NAME`, `PICKUP_CEP` e `PRIVACY_CONTACT` antes de liberar o novo contrato; os valores padrão correspondem aos dados já informados do estabelecimento.
+
+O lembrete do terceiro dia deve executar `python scripts/send_reminders.py` uma vez por dia em um Render Cron Job ou serviço equivalente independente do processo web. O job é idempotente por pacote, revalida o status antes do envio e registra aceite ou falha do provedor. Render Cron e provedores de e-mail/WhatsApp podem ter custos conforme o plano; nenhum serviço é contratado automaticamente.
+
+A identidade do cabeçalho é persistida no PostgreSQL. Imagens e páginas públicas possuem cache versionado; páginas autenticadas, contratos, comprovantes, códigos, pagamentos e QR Codes não entram no service worker.
+
+Para SEO, cadastre o domínio real como domínio canônico na implantação, verifique-o no Google Search Console e envie `/sitemap.xml`. Indexação e posição nos resultados não são garantidas.

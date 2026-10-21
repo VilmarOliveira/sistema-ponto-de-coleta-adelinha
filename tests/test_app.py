@@ -125,7 +125,7 @@ def login(client):
 def test_public_registration_generates_id_and_keeps_sensitive_data_private(client):
     response = register(client)
     assert response.status_code == 200
-    assert b"ADL-000001" in response.data
+    assert b"CLTPCA-1" in response.data
     assert b"52998224725" not in response.data
 
 
@@ -139,12 +139,12 @@ def test_package_form_search_select_and_register_flow(app, client):
     register(client, "Maria da Silva")
     login(client)
 
-    for query in ("Maria", "da Silva", "ADL-000001", "(16) 99999-9999"):
+    for query in ("Maria", "da Silva", "CLTPCA-1", "(16) 99999-9999"):
         response = client.get("/painel/clientes/busca", query_string={"q": query})
         assert response.status_code == 200
         assert response.json["clients"][0]["id"] == 1
         assert response.json["clients"][0]["name"] == "Maria da Silva"
-        assert response.json["clients"][0]["public_id"] == "ADL-000001"
+        assert response.json["clients"][0]["public_id"] == "CLTPCA-1"
 
     selected_id = client.get("/painel/clientes/busca", query_string={"q": "Maria"}).json["clients"][0]["id"]
     response = client.post("/pacotes", data={
@@ -156,9 +156,9 @@ def test_package_form_search_select_and_register_flow(app, client):
         "shelf": "B02", "tracking": "TRK001",
         "csrf_token": token(client),
     }, follow_redirects=True)
-    assert "PCT-000001 registrado como Pequeno" in response.text
+    assert "PCTPCA-1 registrado como Pequeno" in response.text
     connection = sqlite3.connect(app.config["DATABASE"])
-    assert connection.execute("SELECT client_id FROM packages WHERE public_id='PCT-000001'").fetchone()[0] == 1
+    assert connection.execute("SELECT client_id FROM packages WHERE public_id='PCTPCA-1'").fetchone()[0] == 1
 
 
 def test_package_registration_rejects_missing_or_unknown_client(client):
@@ -254,7 +254,7 @@ def test_whatsapp_arrival_action_uses_encoded_complete_message(client):
     href = re.search(r'href="(https://wa\.me/[^\"]+)"[^>]*>Avisar</a>', page)
     assert href is not None
     message = parse_qs(urlparse(html.unescape(href.group(1))).query)["text"][0]
-    assert message.startswith("Olá, Maria da Silva! 😊\n\nSeu pacote PCT-000001, com rastreio BR001234")
+    assert message.startswith("Olá, Maria da Silva! 😊\n\nSeu pacote PCTPCA-1, com rastreio BR001234")
     assert "armazenamento é de R$ 5,00" in message
     assert "4 dias corridos" in message
     assert "A partir do 5º dia" in message
@@ -346,7 +346,7 @@ def test_csrf_is_required(client):
 def test_package_error_preserves_form_and_edit_is_blocked_after_notice(app, client):
     register(client)
     login(client)
-    invalid = {"client_id": 1, "client_label": "Cliente Teste · ADL-000001", "tracking": "000123", "shelf": "A01",
+    invalid = {"client_id": 1, "client_label": "Cliente Teste · CLTPCA-1", "tracking": "000123", "shelf": "A01",
         "width": "100", "height": "40", "length": "20", "weight": "2", "csrf_token": token(client)}
     response = client.post("/pacotes", data=invalid, follow_redirects=True)
     assert "Pacote recusado: Limite de 150 cm na soma e 20 kg." in response.text
@@ -366,7 +366,7 @@ def test_admin_edits_client_changes_password_and_deactivates_with_history(app, c
     response = client.post("/painel/clientes/1/editar", data={"name": "Nome Atualizado", "cpf": "529.982.247-25", "phone": "16988887777", "residential_cep": "14400000", "residential_street": "Rua da Cliente", "residential_number": "123", "residential_district": "Centro", "residential_city": "Franca", "residential_state": "SP", "csrf_token": token(client)}, follow_redirects=True)
     assert "Cadastro atualizado" in response.text
     client.post("/painel/clientes/1/senha", data={"password": "senha-nova", "password_confirm": "senha-nova", "csrf_token": token(client)})
-    response = client.post("/painel/clientes/1/remover", data={"confirmation": "ADL-000001", "csrf_token": token(client)}, follow_redirects=True)
+    response = client.post("/painel/clientes/1/remover", data={"confirmation": "CLTPCA-1", "csrf_token": token(client)}, follow_redirects=True)
     assert "Cliente desativado" in response.text
     connection = sqlite3.connect(app.config["DATABASE"])
     assert connection.execute("SELECT name,active,session_version FROM clients").fetchone() == ("Nome Atualizado", 0, 3)
@@ -561,7 +561,7 @@ def test_client_cannot_access_another_receipt(app, client):
     client.post("/cadastro", data={"name": "Segundo Cliente", "cpf": "98765432100", "phone": "16988888888", "signature": signature(), "password": "outra-senha", "password_confirm": "outra-senha", "terms_accept": "yes", "residential_cep": "14400000", "residential_street": "Rua Dois", "residential_number": "2", "residential_district": "Centro", "residential_city": "Franca", "residential_state": "SP", "csrf_token": token(client)})
     connection = sqlite3.connect(app.config["DATABASE"])
     connection.execute("INSERT INTO pickups(id,receiver_name,receiver_document,signature,staff,picked_at,base_total,late_total,total_paid,payment_confirmed) VALUES(1,'X','1',?,'staff','2026-01-01T10:00:00-03:00',5,0,5,1)", (signature(),))
-    connection.execute("INSERT INTO packages(id,public_id,client_id,width,height,length,weight,category,base_price,status,created_at) VALUES(1,'PCT-000001',2,10,10,10,1,'Pequeno',5,'retirado','2026-01-01T09:00:00-03:00')")
+    connection.execute("INSERT INTO packages(id,public_id,client_id,width,height,length,weight,category,base_price,status,created_at) VALUES(1,'PCTPCA-1',2,10,10,10,1,'Pequeno',5,'retirado','2026-01-01T09:00:00-03:00')")
     connection.execute("INSERT INTO pickup_packages(pickup_id,package_id,base_amount,late_amount) VALUES(1,1,5,0)"); connection.commit()
     with client.session_transaction() as session:
         session["client_id"] = 1
@@ -573,7 +573,7 @@ def test_existing_database_migration_and_one_time_password_link(tmp_path):
     path = tmp_path / "old.db"
     connection = sqlite3.connect(path)
     connection.execute("CREATE TABLE clients (id INTEGER PRIMARY KEY, public_id TEXT, name TEXT, cpf TEXT, phone TEXT, terms_version TEXT, signature TEXT, accepted_at TEXT)")
-    connection.execute("INSERT INTO clients VALUES(1,'ADL-000001','Antigo','11111111111','16999999999','antiga','assinatura','2025-01-01T10:00:00-03:00')"); connection.commit(); connection.close()
+    connection.execute("INSERT INTO clients VALUES(1,'CLTPCA-1','Antigo','11111111111','16999999999','antiga','assinatura','2025-01-01T10:00:00-03:00')"); connection.commit(); connection.close()
     migrated = create_app({"TESTING": True, "SECRET_KEY": "x", "DATABASE": str(path)})
     migrated_columns = {row[1] for row in sqlite3.connect(path).execute("PRAGMA table_info(clients)")}
     assert {"email", "residential_cep", "residential_street", "residential_number"} <= migrated_columns
@@ -623,7 +623,7 @@ def test_withdrawal_snapshot_detail_restart_and_pdf(app, client, receiver, docum
     connection = sqlite3.connect(app.config["DATABASE"])
     snapshot = connection.execute("""SELECT package_public_id,client_id,client_name,client_public_id,service_amount,
         late_days,late_amount,total_amount FROM pickup_packages""").fetchone()
-    assert snapshot == ("PCT-000001", 1, "Cliente Teste", "ADL-000001", 5, 0, 0, 5)
+    assert snapshot == ("PCTPCA-1", 1, "Cliente Teste", "CLTPCA-1", 5, 0, 0, 5)
     connection.execute("UPDATE clients SET name='Nome alterado' WHERE id=1")
     connection.execute("UPDATE packages SET base_price=99 WHERE id=1")
     connection.commit()
@@ -643,7 +643,7 @@ def test_withdrawal_snapshot_detail_restart_and_pdf(app, client, receiver, docum
     assert pdf.status_code == 200
     assert pdf.mimetype == "application/pdf"
     assert pdf.data.startswith(b"%PDF-")
-    assert b"PCT-000001" in pdf.data
+    assert b"PCTPCA-1" in pdf.data
     assert b"Cliente Teste" in pdf.data
     assert receiver.encode() in pdf.data
     assert b"Confirmo que retirei o pacote" in pdf.data
@@ -655,9 +655,9 @@ def test_client_cannot_download_another_clients_pdf(app, client):
     register(client)
     connection = sqlite3.connect(app.config["DATABASE"])
     connection.execute("INSERT INTO clients(id,public_id,name,cpf,phone,terms_version,signature,accepted_at) VALUES(2,'ADL-000002','Outro','99999999999','16999999999','v',?,'2026-01-01')", (signature(),))
-    connection.execute("INSERT INTO packages(id,public_id,client_id,width,height,length,weight,category,base_price,status,created_at) VALUES(1,'PCT-000001',2,10,10,10,1,'Pequeno',5,'retirado','2026-01-01')")
+    connection.execute("INSERT INTO packages(id,public_id,client_id,width,height,length,weight,category,base_price,status,created_at) VALUES(1,'PCTPCA-1',2,10,10,10,1,'Pequeno',5,'retirado','2026-01-01')")
     connection.execute("INSERT INTO pickups(id,receiver_name,receiver_document,signature,staff,picked_at,base_total,late_total,total_paid,payment_method,payment_confirmed) VALUES(1,'Outro','RG',?,'admin','2026-01-01',5,0,5,'Pix',1)", (signature(),))
-    connection.execute("INSERT INTO pickup_packages(pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,service_amount,late_days,total_amount) VALUES(1,1,5,0,'PCT-000001',2,'Outro','ADL-000002',5,0,5)")
+    connection.execute("INSERT INTO pickup_packages(pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,service_amount,late_days,total_amount) VALUES(1,1,5,0,'PCTPCA-1',2,'Outro','ADL-000002',5,0,5)")
     connection.commit()
     with client.session_transaction() as session:
         session["client_id"] = 1
