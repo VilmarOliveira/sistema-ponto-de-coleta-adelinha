@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
 GMAIL_SENDER = "pontodecoletaadelinha@gmail.com"
 GMAIL_DISPLAY_NAME = "Ponto de Coleta Adelinha"
-EMAIL_SIGNATURE = "Me Guarde — Comprou? Deixa com a gente."
+EMAIL_SIGNATURE = "ME GUARDE — COMPROU? DEIXA COM A GENTE."
 
 
 def notification_config_status():

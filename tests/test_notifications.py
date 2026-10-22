@@ -40,8 +40,8 @@ def test_gmail_refreshes_token_and_sends_encoded_message(monkeypatch):
         assert email["Reply-To"] == "pontodecoletaadelinha@gmail.com"
         assert email["To"] == "cliente@example.com"
         assert "123456" in email.get_payload(decode=True).decode("utf-8")
-        assert "Me Guarde" in email.get_payload(decode=True).decode("utf-8")
-        assert "Comprou? Deixa com a gente." in email.get_payload(decode=True).decode("utf-8")
+        assert "ME GUARDE" in email.get_payload(decode=True).decode("utf-8")
+        assert "COMPROU? DEIXA COM A GENTE." in email.get_payload(decode=True).decode("utf-8")
         return Response({"id": "gmail-message-1", "labelIds": ["SENT"]})
     monkeypatch.setattr(notifications, "urlopen", fake_open)
     ok, detail = notifications.send_code("email", "cliente@example.com", "123456")

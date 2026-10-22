@@ -407,3 +407,44 @@ window.addEventListener('online',()=>{if(reconnectNotice)reconnectNotice.remove(
 window.addEventListener('beforeunload',()=>sessionStorage.setItem('adelinha-scroll',String(scrollY)));
 window.addEventListener('pageshow',()=>{const y=Number(sessionStorage.getItem('adelinha-scroll'));if(y)scrollTo(0,y)});
 document.querySelector('#send-registration-code')?.addEventListener('click',async()=>{const form=document.querySelector('#registration-form'),status=document.querySelector('#registration-code-status');status.textContent='Enviando código…';try{const response=await fetch('/cadastro/enviar-codigo',{method:'POST',body:new FormData(form),headers:{'X-Requested-With':'fetch'}});const data=await response.json();status.textContent=data.message||data.error}catch(_){status.textContent='Não foi possível enviar. Confira a conexão e tente novamente.'}});
+
+document.querySelectorAll('[data-carousel]').forEach((carousel) => {
+  const slides = [...carousel.querySelectorAll('[data-slide]')];
+  const dots = [...carousel.querySelectorAll('[data-slide-to]')];
+  const pause = carousel.querySelector('[data-carousel-pause]');
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let current = 0; let timer; let paused = reduced;
+  const show = (index) => {
+    current = index; slides.forEach((slide, i) => slide.classList.toggle('active', i === index));
+    dots.forEach((dot, i) => i === index ? dot.setAttribute('aria-current', 'true') : dot.removeAttribute('aria-current'));
+  };
+  const schedule = () => { clearInterval(timer); if (!paused && slides.length > 1) timer = setInterval(() => show((current + 1) % slides.length), 5000); };
+  dots.forEach((dot, index) => dot.addEventListener('click', () => { show(index); schedule(); }));
+  pause?.addEventListener('click', () => { paused = !paused; pause.textContent = paused ? 'Retomar' : 'Pausar'; pause.setAttribute('aria-label', paused ? 'Retomar rotação' : 'Pausar rotação'); schedule(); });
+  document.addEventListener('visibilitychange', () => document.hidden ? clearInterval(timer) : schedule());
+  schedule();
+});
+
+const themeForm = document.querySelector('#theme-form');
+if (themeForm) {
+  const preview = themeForm.querySelector('.theme-preview');
+  const updatePreview = () => {
+    const f = themeForm.elements;
+    preview.style.background = f.page.value; preview.style.color = f.text.value; preview.style.borderColor = f.border.value;
+    preview.querySelector('a').style.color = f.link.value; preview.querySelector('button').style.background = f.button.value;
+    preview.querySelector('button').style.color = '#fff';
+  };
+  themeForm.querySelectorAll('input[type=color]').forEach((field) => field.addEventListener('input', updatePreview)); updatePreview();
+}
+
+document.querySelectorAll('[data-banner-upload]').forEach((input) => {
+  input.addEventListener('change', () => {
+    const preview = input.closest('form').querySelector('[data-banner-preview]');
+    const file = input.files[0];
+    if (!preview || !file) return;
+    const previous = preview.dataset.objectUrl;
+    if (previous) URL.revokeObjectURL(previous);
+    const url = URL.createObjectURL(file);
+    preview.dataset.objectUrl = url; preview.src = url; preview.hidden = false;
+  });
+});

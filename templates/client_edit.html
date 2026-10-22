@@ -1,4 +1,4 @@
-{% extends 'base.html' %}{% block title %}Editar meus dados · Adelinha{% endblock %}{% block content %}
+{% extends 'base.html' %}{% block title %}Editar meus dados · Ponto de Coleta Adelinha{% endblock %}{% block content %}
 <section class="form-card"><span class="eyebrow">ÁREA DO CLIENTE</span><h1>Editar meus dados</h1><p>Nome, CPF e ID não podem ser alterados por esta tela.</p>
 <div class="details-grid"><p><small>Nome</small><b>{{ client.name }}</b></p><p><small>ID</small><b>{{ client.public_id }}</b></p></div>
 <form method="post"><label>WhatsApp<input name="phone" inputmode="tel" required value="{{ client.phone }}"></label><label>E-mail (opcional)<input name="email" type="email" autocomplete="email" maxlength="254" value="{{ client.email or '' }}"></label>

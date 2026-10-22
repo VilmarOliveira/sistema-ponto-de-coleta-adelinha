@@ -4,6 +4,7 @@ import hashlib
 import base64
 import math
 import re
+import json
 from email.utils import parseaddr
 from decimal import Decimal
 from io import BytesIO
@@ -14,6 +15,7 @@ from pathlib import Path
 from flask import Flask, abort, flash, redirect, render_template, request, send_file, session, url_for, Response
 from markupsafe import escape
 import qrcode
+from PIL import Image, UnidentifiedImageError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from core import (
@@ -41,6 +43,18 @@ PICKUP_COLUMNS = "id,receiver_name,receiver_document,document_type,signature,sta
 PICKUP_PACKAGE_COLUMNS = "pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,tracking_code,package_category,notified_at,service_amount,late_days,total_amount"
 PACKAGE_COLUMNS_P = ",".join(f"p.{column}" for column in PACKAGE_COLUMNS.split(","))
 PICKUP_COLUMNS_PU = ",".join(f"pu.{column}" for column in PICKUP_COLUMNS.split(","))
+
+
+def validated_image_type(data, maximum_bytes):
+    """Valida o conteúdo real sem confiar no nome ou Content-Type enviado."""
+    if not data or len(data) > maximum_bytes:
+        return None
+    try:
+        with Image.open(BytesIO(data)) as image:
+            image.verify()
+            return {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}.get(image.format)
+    except (UnidentifiedImageError, OSError, ValueError):
+        return None
 
 
 def terms_text():
@@ -97,11 +111,39 @@ def create_app(test_config=None):
         value = digits(destination)
         return f"***{value[-4:]}" if value else "contato cadastrado"
 
+    def current_staff():
+        if session.get("staff_user_id"):
+            return db().execute("SELECT id,name,email,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups FROM staff_users WHERE id=?", (session["staff_user_id"],)).fetchone()
+        return None
+
     def login_required(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
+            staff = current_staff()
+            if session.get("staff_user_id") and (not staff or not staff["active"]):
+                session.clear()
             if not session.get("staff"):
                 return redirect(url_for("login", next=request.path))
+            return view(*args, **kwargs)
+        return wrapped
+
+    def admin_required(view):
+        @wraps(view)
+        @login_required
+        def wrapped(*args, **kwargs):
+            staff = current_staff()
+            if session.get("staff_user_id") and not (staff and staff["can_settings"]):
+                abort(403)
+            return view(*args, **kwargs)
+        return wrapped
+
+    def primary_required(view):
+        @wraps(view)
+        @login_required
+        def wrapped(*args, **kwargs):
+            staff = current_staff()
+            if session.get("staff_user_id") and not (staff and staff["is_primary"] and staff["can_users"]):
+                abort(403)
             return view(*args, **kwargs)
         return wrapped
 
@@ -121,6 +163,19 @@ def create_app(test_config=None):
             session["csrf_token"] = secrets.token_urlsafe(32)
         if request.method == "POST" and not secrets.compare_digest(request.form.get("csrf_token", ""), session["csrf_token"]):
             abort(400, "Token CSRF inválido. Atualize a página e tente novamente.")
+        permissions = {
+            "client_search": "can_clients", "staff_client": "can_clients",
+            "edit_client": "can_clients", "admin_client_password": "can_clients",
+            "remove_client": "can_clients", "add_package": "can_packages",
+            "edit_package": "can_packages", "delete_package": "can_packages",
+            "notify": "can_packages", "package_detail": "can_packages",
+            "pickup_summary": "can_pickups", "pickup": "can_pickups", "receipt": "can_pickups",
+        }
+        required = permissions.get(request.endpoint)
+        if required and session.get("staff_user_id"):
+            staff = current_staff()
+            if not staff or not staff[required]:
+                abort(403)
 
     @app.context_processor
     def shared_values():
@@ -128,9 +183,15 @@ def create_app(test_config=None):
         if session.get("client_id"):
             row = db().execute("SELECT name FROM clients WHERE id=?", (session["client_id"],)).fetchone()
             client_name = row["name"] if row else None
+        staff = current_staff() if session.get("staff_user_id") else None
+        setting = db().execute("SELECT active_theme_id FROM settings WHERE id=1").fetchone()
+        theme = db().execute("SELECT colors FROM site_themes WHERE id=?", (setting["active_theme_id"],)).fetchone() if setting and setting["active_theme_id"] else None
+        try: theme_colors = json.loads(theme["colors"]) if theme else {}
+        except (TypeError, json.JSONDecodeError): theme_colors = {}
         return {"csrf_token": session.get("csrf_token"), "address": PICKUP_ADDRESS,
                 "pickup_address": PICKUP_ADDRESS, "pix_receiver_name_full": PIX_RECEIVER_NAME,
-                "logged_name": app.config["STAFF_NAME"] if session.get("staff") else client_name}
+                "logged_name": staff["name"] if staff else (app.config["STAFF_NAME"] if session.get("staff") else client_name),
+                "theme_colors": theme_colors, "staff_account": staff, "staff_legacy": session.get("staff_legacy")}
 
     @app.template_filter("local_datetime")
     def local_datetime(value):
@@ -224,7 +285,8 @@ def create_app(test_config=None):
 
     @app.get("/")
     def index():
-        return render_template("index.html")
+        banners = db().execute("SELECT id,alt_text,position,updated_at FROM site_banners ORDER BY position,id LIMIT 3").fetchall()
+        return render_template("index.html", banners=banners)
 
     @app.get("/duvidas-frequentes")
     def faq():
@@ -241,7 +303,7 @@ def create_app(test_config=None):
         return response
 
     @app.route("/painel/configuracoes/identidade", methods=["GET", "POST"])
-    @login_required
+    @admin_required
     def visual_identity():
         if request.method == "POST":
             if request.form.get("restore") == "yes":
@@ -249,8 +311,7 @@ def create_app(test_config=None):
             else:
                 upload = request.files.get("image")
                 data = upload.read(5 * 1024 * 1024 + 1) if upload else b""
-                signatures = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"), (b"RIFF", "image/webp"))
-                mime = next((kind for magic, kind in signatures if data.startswith(magic) and (kind != "image/webp" or data[8:12] == b"WEBP")), None)
+                mime = validated_image_type(data, 5 * 1024 * 1024)
                 if not data or len(data) > 5 * 1024 * 1024 or not mime:
                     flash("Envie uma imagem PNG, JPG ou WebP de até 5 MB.", "error")
                     return render_template("visual_identity.html"), 400
@@ -259,6 +320,119 @@ def create_app(test_config=None):
             flash("Identidade visual alterada com sucesso!", "success")
             return redirect(url_for("visual_identity"))
         return render_template("visual_identity.html")
+
+    @app.get("/banners/<int:banner_id>/imagem")
+    def banner_image(banner_id):
+        banner = db().execute("SELECT image,mime_type,updated_at FROM site_banners WHERE id=?", (banner_id,)).fetchone()
+        if not banner: abort(404)
+        return Response(bytes(banner["image"]), mimetype=banner["mime_type"], headers={"Cache-Control": "public,max-age=3600"})
+
+    @app.route("/painel/configuracoes/banners", methods=["GET", "POST"])
+    @admin_required
+    def banner_settings():
+        if request.method == "POST":
+            action = request.form.get("action", "save")
+            try: banner_id = int(request.form.get("banner_id", "0"))
+            except ValueError: banner_id = 0
+            if action == "remove":
+                db().execute("DELETE FROM site_banners WHERE id=?", (banner_id,)); audit("remover_banner", "banner", banner_id); db().commit()
+                flash("Banner removido.", "success"); return redirect(url_for("banner_settings"))
+            try: position = int(request.form.get("position", "1"))
+            except ValueError: position = 0
+            alt_text = request.form.get("alt_text", "").strip()
+            upload = request.files.get("image"); data = upload.read(300 * 1024 + 1) if upload and upload.filename else b""
+            mime = validated_image_type(data, 300 * 1024) if data else None
+            existing = db().execute("SELECT id FROM site_banners WHERE id=?", (banner_id,)).fetchone() if banner_id else None
+            count = db().execute("SELECT COUNT(id) total FROM site_banners").fetchone()["total"]
+            if position not in (1,2,3) or not alt_text or (not existing and count >= 3) or (data and (len(data)>300*1024 or not mime)) or (not existing and not data):
+                flash("Informe descrição, posição de 1 a 3 e uma imagem PNG, JPG ou WebP de até 300 KB.", "error")
+                return redirect(url_for("banner_settings"))
+            conflict = db().execute("SELECT id FROM site_banners WHERE position=? AND id!=?", (position,banner_id)).fetchone()
+            if conflict:
+                flash("A posição escolhida já está em uso.", "error"); return redirect(url_for("banner_settings"))
+            timestamp=now().isoformat()
+            if existing and data: db().execute("UPDATE site_banners SET image=?,mime_type=?,alt_text=?,position=?,updated_at=? WHERE id=?",(data,mime,alt_text,position,timestamp,banner_id))
+            elif existing: db().execute("UPDATE site_banners SET alt_text=?,position=?,updated_at=? WHERE id=?",(alt_text,position,timestamp,banner_id))
+            else: db().execute("INSERT INTO site_banners(image,mime_type,alt_text,position,updated_at) VALUES(?,?,?,?,?)",(data,mime,alt_text,position,timestamp))
+            audit("salvar_banner", "banner", banner_id or None, f"posição {position}"); db().commit(); flash("Banner salvo.","success"); return redirect(url_for("banner_settings"))
+        banners=db().execute("SELECT id,alt_text,position,updated_at FROM site_banners ORDER BY position").fetchall()
+        return render_template("banner_settings.html", banners=banners)
+
+    @app.route("/painel/configuracoes/aparencia", methods=["GET", "POST"])
+    @admin_required
+    def appearance_settings():
+        defaults={"primary":"#ff4b16","secondary":"#4c2484","page":"#f6f4f8","surface":"#ffffff","text":"#142441","link":"#4c2484","border":"#e2dce9","header":"#ffffff","footer":"#142441","button":"#ff4b16","button_hover":"#d9360b"}
+        if request.method == "POST":
+            action=request.form.get("action")
+            if action == "restore":
+                db().execute("UPDATE settings SET active_theme_id=NULL WHERE id=1"); audit("restaurar_tema","configuracao",1); db().commit(); flash("Cores padrão restauradas.","success"); return redirect(url_for("appearance_settings"))
+            if action == "activate":
+                theme_id=int(request.form.get("theme_id","0")); found=db().execute("SELECT id FROM site_themes WHERE id=?",(theme_id,)).fetchone()
+                if not found: abort(404)
+                db().execute("UPDATE settings SET active_theme_id=? WHERE id=1",(theme_id,)); audit("ativar_tema","tema",theme_id); db().commit(); flash("Tema ativado.","success"); return redirect(url_for("appearance_settings"))
+            name=request.form.get("name","").strip(); colors={key:request.form.get(key,"").strip().lower() for key in defaults}
+            if not name or not all(re.fullmatch(r"#[0-9a-f]{6}",value) for value in colors.values()):
+                flash("Informe um nome e cores válidas no formato hexadecimal.","error"); return render_template("appearance_settings.html",defaults=defaults,themes=[],form=colors),400
+            def lum(color):
+                values=[int(color[i:i+2],16)/255 for i in (1,3,5)]; values=[v/12.92 if v<=.03928 else ((v+.055)/1.055)**2.4 for v in values]; return .2126*values[0]+.7152*values[1]+.0722*values[2]
+            ratio=(max(lum(colors["text"]),lum(colors["page"]))+.05)/(min(lum(colors["text"]),lum(colors["page"]))+.05)
+            if ratio < 4.5:
+                flash("A combinação entre texto e fundo prejudica o contraste; escolha cores mais distintas.","error"); return render_template("appearance_settings.html",defaults=defaults,themes=[],form=colors),400
+            cur=db().execute("INSERT INTO site_themes(name,colors,created_at,created_by) VALUES(?,?,?,?) RETURNING id",(name,json.dumps(colors),now().isoformat(),session.get("staff")))
+            theme_id=cur.fetchone()["id"]; db().execute("UPDATE settings SET active_theme_id=? WHERE id=1",(theme_id,)); audit("criar_tema","tema",theme_id,name); db().commit(); flash("Tema salvo e ativado.","success"); return redirect(url_for("appearance_settings"))
+        themes=db().execute("SELECT id,name,colors FROM site_themes ORDER BY id DESC LIMIT 50").fetchall()
+        return render_template("appearance_settings.html",defaults=defaults,themes=themes,form=defaults)
+
+    @app.route("/painel/configuracoes/usuarios", methods=["GET", "POST"])
+    @primary_required
+    def staff_users():
+        if request.method == "POST":
+            name=request.form.get("name","").strip(); email=request.form.get("email","").strip().lower(); password=request.form.get("password",""); role=request.form.get("role")
+            if len(name)<3 or not valid_email(email) or len(password)<8 or role not in ("administrador","atendente"):
+                flash("Confira nome, e-mail, perfil e senha de no mínimo 8 caracteres.","error")
+            else:
+                try:
+                    primary = int(request.form.get("is_primary") == "yes")
+                    permissions = tuple(int(role == "administrador" or request.form.get(key) == "yes") for key in ("can_clients", "can_packages", "can_pickups"))
+                    cur=db().execute("INSERT INTO staff_users(name,email,password_hash,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,created_at) VALUES(?,?,?,?,?,1,?,?,?,?,?,?) RETURNING id",(name,email,generate_password_hash(password),role,primary,int(role=="administrador"),primary,*permissions,now().isoformat()))
+                    uid=cur.fetchone()["id"]; audit("criar_usuario_equipe","usuario_equipe",uid,f"perfil {role}"); db().commit(); flash("Usuário criado.","success")
+                except DatabaseIntegrityError: db().rollback(); flash("Este e-mail já possui acesso.","error")
+            return redirect(url_for("staff_users"))
+        users=db().execute("SELECT id,name,email,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,created_at FROM staff_users ORDER BY name").fetchall()
+        legacy=db().execute("SELECT legacy_staff_active FROM settings WHERE id=1").fetchone()
+        return render_template("staff_users.html",users=users,legacy_active=legacy["legacy_staff_active"])
+
+    @app.post("/painel/configuracoes/usuarios/<int:user_id>/editar")
+    @primary_required
+    def staff_user_edit(user_id):
+        user=db().execute("SELECT id,is_primary FROM staff_users WHERE id=?",(user_id,)).fetchone()
+        if not user: abort(404)
+        name=request.form.get("name","").strip(); role=request.form.get("role")
+        if len(name)<3 or role not in ("administrador","atendente"): flash("Dados inválidos.","error")
+        elif user["is_primary"] and role!="administrador": flash("O administrador principal deve manter o perfil de administrador.","error")
+        else:
+            permissions = tuple(int(role == "administrador" or request.form.get(key) == "yes") for key in ("can_clients", "can_packages", "can_pickups"))
+            db().execute("UPDATE staff_users SET name=?,role=?,can_settings=?,can_clients=?,can_packages=?,can_pickups=? WHERE id=?",(name,role,int(role=="administrador"),*permissions,user_id))
+            audit("editar_usuario_equipe","usuario_equipe",user_id,f"perfil {role}"); db().commit(); flash("Usuário atualizado.","success")
+        return redirect(url_for("staff_users"))
+
+    @app.post("/painel/configuracoes/usuarios/<int:user_id>/alternar")
+    @primary_required
+    def staff_user_toggle(user_id):
+        user=db().execute("SELECT id,active,is_primary FROM staff_users WHERE id=?",(user_id,)).fetchone()
+        if not user: abort(404)
+        if user["active"]:
+            active_admins=db().execute("SELECT COUNT(id) total FROM staff_users WHERE active=1 AND is_primary=1").fetchone()["total"]
+            if user["is_primary"] and active_admins<=1: flash("Não é possível desativar o último administrador principal.","error"); return redirect(url_for("staff_users"))
+        db().execute("UPDATE staff_users SET active=? WHERE id=?",(0 if user["active"] else 1,user_id)); audit("alterar_acesso_equipe","usuario_equipe",user_id); db().commit(); flash("Acesso atualizado.","success"); return redirect(url_for("staff_users"))
+
+    @app.post("/painel/configuracoes/usuarios/desativar-legado")
+    @primary_required
+    def disable_legacy_staff():
+        principals=db().execute("SELECT COUNT(id) total FROM staff_users WHERE active=1 AND is_primary=1").fetchone()["total"]
+        if not principals: flash("Crie e teste uma conta de administrador principal antes de desativar o acesso anterior.","error")
+        else: db().execute("UPDATE settings SET legacy_staff_active=0 WHERE id=1"); audit("desativar_acesso_legado","configuracao",1); db().commit(); flash("Acesso administrativo anterior desativado.","success")
+        return redirect(url_for("staff_users"))
 
     @app.get("/blog")
     def blog():
@@ -280,7 +454,7 @@ def create_app(test_config=None):
         return Response(data, mimetype=mime, headers={"Cache-Control":"public, max-age=86400"})
 
     @app.route("/painel/blog", methods=["GET", "POST"])
-    @login_required
+    @admin_required
     def blog_admin():
         if request.method == "POST":
             title, slug = request.form.get("title", "").strip(), request.form.get("slug", "").strip().lower()
@@ -306,7 +480,7 @@ def create_app(test_config=None):
         return render_template("blog_admin.html", posts=posts, edit=edit)
 
     @app.post("/painel/blog/<int:post_id>/despublicar")
-    @login_required
+    @admin_required
     def blog_unpublish(post_id):
         db().execute("UPDATE blog_posts SET status='draft',updated_at=? WHERE id=?", (now().isoformat(), post_id)); db().commit()
         flash("Artigo retirado da publicação.", "success"); return redirect(url_for("blog_admin"))
@@ -410,18 +584,44 @@ def create_app(test_config=None):
 
     @app.post("/login")
     def login_post():
-        user = request.form.get("user", "")
+        user = request.form.get("user", "").strip().lower()
         if login_blocked("staff", user):
             flash("Muitas tentativas. Aguarde 15 minutos.", "error")
             return redirect(url_for("login"))
-        valid = user == app.config["STAFF_USER"] and check_password_hash(app.config["STAFF_PASSWORD_HASH"], request.form.get("password", ""))
-        record_login("staff", user, valid)
-        if valid:
-            session.clear()
-            session["staff"] = request.form["user"]
+        account = db().execute("SELECT id,name,email,password_hash,role,is_primary,active FROM staff_users WHERE LOWER(email)=?", (user,)).fetchone()
+        valid_account = bool(account and account["active"] and check_password_hash(account["password_hash"], request.form.get("password", "")))
+        legacy_setting = db().execute("SELECT legacy_staff_active FROM settings WHERE id=1").fetchone()
+        valid_legacy = bool((not legacy_setting or legacy_setting["legacy_staff_active"]) and user == app.config["STAFF_USER"].lower() and check_password_hash(app.config["STAFF_PASSWORD_HASH"], request.form.get("password", "")))
+        record_login("staff", user, valid_account or valid_legacy)
+        if valid_account or valid_legacy:
+            session.clear(); session["staff"] = account["email"] if valid_account else app.config["STAFF_USER"]
+            if valid_account: session["staff_user_id"] = account["id"]
+            else: session["staff_legacy"] = True
             return redirect(url_for("dashboard"))
         flash("Usuário ou senha inválidos.", "error")
         return redirect(url_for("login"))
+
+    @app.route("/equipe/recuperar-senha", methods=["GET", "POST"])
+    def staff_password_recovery():
+        if request.method == "GET": return render_template("staff_password_recovery.html", stage="request")
+        stage=request.form.get("stage")
+        if stage == "request":
+            email=request.form.get("email","").strip().lower(); account=db().execute("SELECT id,email FROM staff_users WHERE LOWER(email)=? AND active=1",(email,)).fetchone()
+            if not account:
+                flash("Se o e-mail estiver cadastrado, enviaremos as instruções.","success"); return render_template("staff_password_recovery.html",stage="confirm")
+            cutoff=(now()-timedelta(minutes=15)).isoformat(); count=db().execute("SELECT COUNT(id) total FROM staff_recovery_codes WHERE staff_user_id=? AND created_at>=?",(account["id"],cutoff)).fetchone()["total"]
+            if count>=3: flash("Limite de envios atingido. Aguarde 15 minutos.","error"); return render_template("staff_password_recovery.html",stage="request"),429
+            code=f"{secrets.randbelow(1000000):06d}"; created=now().isoformat(); sent,detail=send_code("email",account["email"],code)
+            cur=db().execute("INSERT INTO staff_recovery_codes(staff_user_id,code_hash,expires_at,provider_status,created_at,used_at) VALUES(?,?,?,?,?,?) RETURNING id",(account["id"],hashlib.sha256(code.encode()).hexdigest(),(now()+timedelta(minutes=10)).isoformat(),detail,created,None if sent else created)); code_id=cur.fetchone()["id"]; db().commit()
+            if not sent: flash(f"Não foi possível enviar o código. {detail}.","error"); return render_template("staff_password_recovery.html",stage="request"),503
+            session["staff_recovery_id"]=code_id; flash("O Gmail aceitou o envio do código.","success"); return render_template("staff_password_recovery.html",stage="confirm",masked_contact=mask_contact("email",email))
+        row=db().execute("SELECT id,staff_user_id,code_hash,expires_at,attempts,used_at FROM staff_recovery_codes WHERE id=?",(session.get("staff_recovery_id"),)).fetchone() if session.get("staff_recovery_id") else None
+        password=request.form.get("password",""); valid=bool(row and not row["used_at"] and row["attempts"]<5 and datetime.fromisoformat(row["expires_at"])>now() and secrets.compare_digest(row["code_hash"],hashlib.sha256(request.form.get("code","").encode()).hexdigest()))
+        if not valid or len(password)<8 or password!=request.form.get("password_confirm"):
+            if row: db().execute("UPDATE staff_recovery_codes SET attempts=attempts+1 WHERE id=?",(row["id"],)); db().commit()
+            flash("Código inválido ou expirado, ou as senhas não conferem.","error"); return render_template("staff_password_recovery.html",stage="confirm"),400
+        db().execute("UPDATE staff_users SET password_hash=? WHERE id=?",(generate_password_hash(password),row["staff_user_id"])); db().execute("UPDATE staff_recovery_codes SET used_at=? WHERE id=?",(now().isoformat(),row["id"])); db().commit(); session.pop("staff_recovery_id",None); flash("Senha alterada com sucesso!","success"); return redirect(url_for("login"))
+
 
     @app.get("/cliente/login")
     def client_login():
@@ -434,18 +634,18 @@ def create_app(test_config=None):
         stage = request.form.get("stage")
         if stage == "request":
             session.pop("password_recovery_id", None)
-            cpf, channel = digits(request.form.get("cpf", "")), request.form.get("channel")
-            if channel not in ("email", "whatsapp"):
-                flash("Escolha E-mail ou WhatsApp.", "error")
+            cpf, channel = digits(request.form.get("cpf", "")), "email"
+            if request.form.get("channel") not in (None, "", "email"):
+                flash("A recuperação de senha está disponível somente por e-mail.", "error")
                 return render_template("password_recovery.html", stage="request", entered_cpf=request.form.get("cpf", "")), 400
             client = db().execute("SELECT id,phone,email FROM clients WHERE REPLACE(REPLACE(REPLACE(cpf,'.',''),'-',''),' ','')=? AND active=1", (cpf,)).fetchone()
             # Para uma conta inexistente, mantém uma resposta neutra e não revela cadastros.
             if not client:
                 flash("Se os dados estiverem corretos, enviaremos as instruções ao contato cadastrado.", "success")
                 return render_template("password_recovery.html", stage="confirm")
-            destination = client["email"] if channel == "email" else client["phone"]
+            destination = client["email"]
             if not destination:
-                flash("O canal escolhido não está disponível nesse cadastro. Tente o outro canal ou procure a equipe.", "error")
+                flash("Este cadastro não possui e-mail disponível. Procure a equipe para atualizar o endereço de e-mail.", "error")
                 return render_template("password_recovery.html", stage="request", entered_cpf=request.form.get("cpf", "")), 400
             cutoff = (now() - timedelta(minutes=15)).isoformat()
             sent_count = db().execute("SELECT COUNT(id) AS total FROM verification_codes WHERE client_id=? AND purpose='password_recovery' AND created_at>=?", (client["id"], cutoff)).fetchone()["total"]
@@ -703,7 +903,7 @@ def create_app(test_config=None):
         return redirect(url_for("staff_client", client_id=client_id))
 
     @app.get("/painel/configuracoes/notificacoes")
-    @login_required
+    @admin_required
     def notification_settings():
         records = db().execute("SELECT channel,destination,provider_status,created_at FROM verification_codes ORDER BY id DESC LIMIT 50").fetchall()
         safe_records = [{"channel": row["channel"], "destination": mask_contact(row["channel"], row["destination"]),
@@ -1078,6 +1278,10 @@ def init_db(database):
         f"CREATE TABLE IF NOT EXISTS blog_posts (id {id_type}, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL, summary TEXT, body TEXT NOT NULL, cover_image BYTEA, cover_alt TEXT, seo_title TEXT, seo_description TEXT, status TEXT NOT NULL DEFAULT 'draft', published_at TEXT, updated_at TEXT NOT NULL)",
         f"CREATE TABLE IF NOT EXISTS verification_codes (id {id_type}, client_id BIGINT NOT NULL REFERENCES clients(id), purpose TEXT NOT NULL, channel TEXT NOT NULL, destination TEXT NOT NULL, code_hash TEXT NOT NULL, expires_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, sends INTEGER NOT NULL DEFAULT 1, provider_status TEXT, created_at TEXT NOT NULL, used_at TEXT)",
         f"CREATE TABLE IF NOT EXISTS reminder_logs (id {id_type}, package_id BIGINT NOT NULL REFERENCES packages(id), channel TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL)",
+        f"CREATE TABLE IF NOT EXISTS site_banners (id {id_type}, image BYTEA NOT NULL, mime_type TEXT NOT NULL, alt_text TEXT NOT NULL, position INTEGER NOT NULL UNIQUE, updated_at TEXT NOT NULL)",
+        f"CREATE TABLE IF NOT EXISTS site_themes (id {id_type}, name TEXT NOT NULL, colors TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL)",
+        f"CREATE TABLE IF NOT EXISTS staff_users (id {id_type}, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL, is_primary INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, can_settings INTEGER NOT NULL DEFAULT 0, can_users INTEGER NOT NULL DEFAULT 0, can_clients INTEGER NOT NULL DEFAULT 1, can_packages INTEGER NOT NULL DEFAULT 1, can_pickups INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)",
+        f"CREATE TABLE IF NOT EXISTS staff_recovery_codes (id {id_type}, staff_user_id BIGINT NOT NULL REFERENCES staff_users(id), code_hash TEXT NOT NULL, expires_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, provider_status TEXT, created_at TEXT NOT NULL, used_at TEXT)",
     ]
     for statement in statements:
         connection.execute(statement)
@@ -1101,16 +1305,17 @@ def init_db(database):
         "tracking_code": "TEXT", "package_category": "TEXT", "notified_at": "TEXT",
         "service_amount": "REAL", "late_days": "INTEGER", "total_amount": "REAL",
     })
-    ensure_columns(connection, "settings", {"header_image": "BYTEA" if connection.postgres else "BLOB", "header_image_mime": "TEXT"})
+    ensure_columns(connection, "settings", {"header_image": "BYTEA" if connection.postgres else "BLOB", "header_image_mime": "TEXT", "active_theme_id": "BIGINT", "legacy_staff_active": "INTEGER NOT NULL DEFAULT 1"})
+    ensure_columns(connection, "staff_users", {"can_clients": "INTEGER NOT NULL DEFAULT 1", "can_packages": "INTEGER NOT NULL DEFAULT 1", "can_pickups": "INTEGER NOT NULL DEFAULT 1"})
     ensure_columns(connection, "packages", {"reminder_sent_at": "TEXT", "forwarded_at": "TEXT"})
     duplicate_tracking = connection.execute("""SELECT 1 FROM packages WHERE tracking IS NOT NULL AND trim(tracking)!=''
         GROUP BY UPPER(trim(tracking)) HAVING COUNT(*)>1 LIMIT 1""").fetchone()
     if not duplicate_tracking:
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_packages_tracking ON packages(UPPER(trim(tracking)))")
     initial_posts = [
-        ("receber-compras-online-em-franca", "Como receber compras online em Franca sem estar em casa", "Conheça uma alternativa para receber encomendas fora de casa.", "O Guarda Aqui Adelinha recebe e armazena seus pacotes para retirada no Jardim Adelinha. Cadastre-se, use seu nome e código na compra e aguarde o aviso de chegada."),
-        ("como-funciona-guarda-aqui-adelinha", "Como funciona o Guarda Aqui da Adelinha", "Cadastro, aviso, prazo e retirada explicados.", "Após o cadastro e assinatura do contrato, use o endereço do ponto e seu código. Pacotes pequenos custam R$ 4,90 e grandes R$ 9,90. O prazo sem adicional é de quatro dias corridos."),
-        ("endereco-para-receber-compras-adelinha", "Qual endereço usar para receber suas compras na Adelinha", "Veja como identificar corretamente sua entrega.", "Use Rua Afonso Borges de Freitas, 795, Jardim Adelinha, Franca – SP, com o CEP exibido no sistema, além do seu nome completo e código de cliente."),
+        ("receber-compras-online-em-franca", "Como receber compras online em Franca sem estar em casa", "Conheça uma alternativa para receber encomendas fora de casa.", "O Me Guarde do Ponto de Coleta Adelinha recebe e armazena seus pacotes para retirada no Jardim Adelinha. Cadastre-se, use seu nome e código na compra e aguarde o aviso de chegada."),
+        ("como-funciona-guarda-aqui-adelinha", "Como funciona o Me Guarde do Ponto de Coleta Adelinha", "Cadastro, aviso, prazo e retirada explicados.", "Após o cadastro e assinatura do contrato, use o endereço do ponto e seu código. Pacotes pequenos custam R$ 4,90 e grandes R$ 9,90. O prazo sem adicional é de quatro dias corridos."),
+        ("endereco-para-receber-compras-adelinha", "Qual endereço usar para receber suas compras no Ponto de Coleta Adelinha", "Veja como identificar corretamente sua entrega.", "Use Rua Afonso Borges de Freitas, 795, Jardim Adelinha, Franca – SP, com o CEP exibido no sistema, além do seu nome completo e código de cliente."),
         ("quanto-custa-guardar-encomenda", "Quanto custa receber e guardar uma encomenda", "Entenda valores, limites e atraso.", "Pequeno: soma até 80 cm e 10 kg, R$ 4,90. Grande: soma até 150 cm e 20 kg, R$ 9,90. Desde o quinto dia há R$ 0,50 por dia e pacote."),
         ("retirada-de-pacotes-por-outra-pessoa", "Como funciona a retirada de pacotes por outra pessoa", "Documentos e autorização para retirada por terceiro.", "Outra pessoa pode retirar com autorização verificável do titular, documento oficial próprio com foto e assinatura no comprovante de retirada."),
     ]

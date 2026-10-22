@@ -5,3 +5,4 @@ tzdata==2025.2
 reportlab==4.4.4
 qrcode[pil]==8.2
 psycopg[binary]==3.2.10
+Pillow==13.0.0

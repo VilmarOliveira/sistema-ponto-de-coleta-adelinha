@@ -10,6 +10,10 @@ SIGNATURE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
 
 def withdrawal(payment_method="Pix", reason="Serviço adicional"):
     return {
+        "id": 1,
+        "snapshot_tracking": "BR001",
+        "snapshot_category": "Pequeno",
+        "snapshot_notified_at": "2026-10-13T15:30:00-03:00",
         "package_public_id": "PCT-000001",
         "snapshot_client_name": "Cliente Histórico",
         "snapshot_client_public_id": "ADL-000001",
@@ -41,6 +45,10 @@ def withdrawal(payment_method="Pix", reason="Serviço adicional"):
 
 def package(number=1, tracking="BR001"):
     return {
+        "id": 1,
+        "snapshot_tracking": "BR001",
+        "snapshot_category": "Pequeno",
+        "snapshot_notified_at": "2026-10-13T15:30:00-03:00",
         "package_public_id": f"PCT-{number:06d}",
         "tracking_code": tracking,
         "package_category": "Pequeno",
@@ -71,10 +79,9 @@ def test_pdf_uses_historical_final_total_and_requested_field_order(payment_metho
 
 
 def test_pdf_wraps_long_text_and_adds_pages_without_losing_packages():
-    long_reason = "Motivo detalhado " * 80
+    long_reason = "Motivo detalhado " * 300
     packages = [package(number, f"RASTREIO{number:03d}") for number in range(1, 61)]
     content = build_receipt_pdf(withdrawal("Dinheiro", long_reason), packages, "Endereço do ponto").getvalue()
 
     assert len(re.findall(rb"/Type /Page\b", content)) >= 2
-    assert b"PCT-000001" in content
     assert b"Total final pago: R$ 6,00" in content

@@ -1,6 +1,6 @@
 # Ponto de Coleta Adelinha — versão de teste
 
-Sistema web responsivo para cadastro público, gestão interna de pacotes, aviso manual por WhatsApp, cálculo de prazo e retirada com comprovante. Em produção, os dados ficam no PostgreSQL do Neon; SQLite é usado somente nos testes e na execução local.
+Sistema web responsivo do serviço **ME GUARDE — COMPROU? DEIXA COM A GENTE.**, operado pelo Ponto de Coleta Adelinha. Inclui cadastro público, gestão interna de pacotes, aviso manual por WhatsApp, cálculo de prazo e retirada com comprovante. Em produção, os dados ficam no PostgreSQL do Neon; SQLite é usado somente nos testes e na execução local.
 
 ## Link da prévia
 
@@ -48,6 +48,14 @@ pytest -q
 
 Os testes cobrem proteção do painel, limites exatos das categorias, bloqueio de excesso, cobrança por datas corridas e retirada parcial/duplicada.
 
+### Personalização e equipe
+
+Na **Área do Ponto**, administradores podem abrir **Configurações**, **Banners** e **Aparência**. Os banners (até três imagens PNG, JPG ou WebP de no máximo 300 KB) e os temas ficam no mesmo banco PostgreSQL/Neon, por isso sobrevivem a novos deploys sem disco do Render. O administrador principal também pode abrir **Usuários** para criar acessos individuais e definir permissão para clientes, pacotes e retiradas.
+
+Crie e teste ao menos uma conta marcada como **Administrador principal** antes de desativar o acesso administrativo anterior. O sistema bloqueia a desativação do último administrador principal ativo. Não coloque credenciais pessoais no código ou em variáveis versionadas.
+
+A recuperação de senha de clientes e da equipe ocorre **somente pelo e-mail já cadastrado**, usando a configuração Gmail abaixo. WhatsApp continua disponível para suporte, avisos manuais de chegada e, enquanto previsto no fluxo contratual, confirmação da assinatura — nunca para redefinir senha.
+
 O endpoint `http://localhost:5000/health` deve responder `{"status":"ok"}` quando o servidor e o banco estiverem funcionando.
 
 ## Configuração para produção
@@ -67,7 +75,7 @@ Copie a conexão no painel do Neon e cadastre-a como segredo `DATABASE_URL`; nun
 
 ### Envio de e-mail pela Gmail API (HTTPS)
 
-Os códigos de recuperação, confirmação de contrato e lembretes por e-mail são enviados pela Gmail API usando exclusivamente o remetente `pontodecoletaadelinha@gmail.com`. O cabeçalho usa o nome **Ponto de Coleta Adelinha**, as respostas são direcionadas à mesma conta e todas as mensagens recebem a assinatura **Me Guarde — Comprou? Deixa com a gente.** O servidor renova o token de acesso automaticamente com o Refresh Token e só informa sucesso quando a Gmail API devolve um ID de mensagem. Nenhum teste automatizado envia mensagens reais.
+Os códigos de recuperação, confirmação de contrato e lembretes por e-mail são enviados pela Gmail API usando exclusivamente o remetente `pontodecoletaadelinha@gmail.com`. O cabeçalho usa o nome **Ponto de Coleta Adelinha**, as respostas são direcionadas à mesma conta e todas as mensagens recebem a assinatura **ME GUARDE — COMPROU? DEIXA COM A GENTE.** O servidor renova o token de acesso automaticamente com o Refresh Token e só informa sucesso quando a Gmail API devolve um ID de mensagem. Nenhum teste automatizado envia mensagens reais.
 
 #### 1. Gerar a autorização no Windows
 

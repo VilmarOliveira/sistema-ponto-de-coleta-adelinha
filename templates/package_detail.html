@@ -1,4 +1,4 @@
-{% extends 'base.html' %}{% block title %}Detalhes do pacote · Adelinha{% endblock %}{% block content %}
+{% extends 'base.html' %}{% block title %}Detalhes do pacote · Ponto de Coleta Adelinha{% endblock %}{% block content %}
 <article class="document"><span class="eyebrow">PACOTE</span><h1>{{ package.public_id }}</h1>
 {% if withdrawal %}<span class="badge">Comprovante: CMPPCA-{{ withdrawal.id }}</span><h2>Retirada</h2><p class="receipt-fields">
 <b>Rastreio registrado:</b> {{ withdrawal.snapshot_tracking or 'Não registrado' }}<br>

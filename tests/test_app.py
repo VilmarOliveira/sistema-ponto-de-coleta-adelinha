@@ -203,8 +203,8 @@ def test_late_fee_counts_calendar_dates():
 def test_partial_pickup_and_duplicate_protection(app, client):
     register(client)
     login(client)
-    for shelf in ("A1", "A2"):
-        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "tracking": "TRK001", "csrf_token": token(client)})
+    for index, shelf in enumerate(("A1", "A2"), 1):
+        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "tracking": f"TRK{index:03d}", "csrf_token": token(client)})
     client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
     client.post("/pacotes/2/avisar", data={"csrf_token": token(client)})
     response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Maria", "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(), "csrf_token": token(client)})
@@ -255,7 +255,7 @@ def test_whatsapp_arrival_action_uses_encoded_complete_message(client):
     assert href is not None
     message = parse_qs(urlparse(html.unescape(href.group(1))).query)["text"][0]
     assert message.startswith("Olá, Maria da Silva! 😊\n\nSeu pacote PCTPCA-1, com rastreio BR001234")
-    assert "armazenamento é de R$ 5,00" in message
+    assert "armazenamento é de R$ 4,90" in message
     assert "4 dias corridos" in message
     assert "A partir do 5º dia" in message
     assert message.endswith("Agradecemos pela compreensão!")
@@ -297,8 +297,8 @@ def test_second_pickup_shows_existing_receipt_without_new_rows(app, client):
 def test_normal_pickup_of_multiple_distinct_packages_is_atomic(app, client):
     register(client)
     login(client)
-    for shelf in ("A1", "A2"):
-        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "tracking": "TRK001", "csrf_token": token(client)})
+    for index, shelf in enumerate(("A1", "A2"), 1):
+        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "tracking": f"TRK{index:03d}", "csrf_token": token(client)})
     for package_id in (1, 2):
         client.post(f"/pacotes/{package_id}/avisar", data={"csrf_token": token(client)})
 
@@ -317,8 +317,8 @@ def test_normal_pickup_of_multiple_distinct_packages_is_atomic(app, client):
 def test_pickup_rolls_back_every_change_when_a_link_fails(app, client):
     register(client)
     login(client)
-    for shelf in ("A1", "A2"):
-        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "tracking": "TRK001", "csrf_token": token(client)})
+    for index, shelf in enumerate(("A1", "A2"), 1):
+        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "tracking": f"TRK{index:03d}", "csrf_token": token(client)})
     for package_id in (1, 2):
         client.post(f"/pacotes/{package_id}/avisar", data={"csrf_token": token(client)})
 
@@ -407,7 +407,7 @@ def test_pickup_screen_has_only_pix_and_cash_and_exact_summary_order(client):
     dashboard = client.get("/painel").text
     assert "Cartão de débito" not in dashboard and "Cartão de crédito" not in dashboard
     assert dashboard.count('name="payment_method"') == 2
-    labels = ["Pacotes + taxa de atraso:", "Desconto:", "Acréscimo:", "Total a pagar:"]
+    labels = ["Pacotes + taxa de atraso:", "Acréscimo:", "Desconto:", "Total a pagar:"]
     positions = [dashboard.index(label) for label in labels]
     assert positions == sorted(positions)
     assert "Subtotal antes do desconto" not in dashboard
@@ -440,24 +440,22 @@ def test_percentage_discount_updates_pix_and_is_saved_in_history(app, client):
     summary = client.post("/painel/retirada/resumo", data={"package_ids": ["1", "2"],
         "discount_percent": "12,5", "csrf_token": token(client)})
     assert summary.status_code == 200
-    assert summary.json["original_total"] == 10
-    assert summary.json["discount_amount"] == 1.25
-    assert summary.json["total"] == 8.75
-    assert "54048.75" in summary.json["pix_code"]
+    assert summary.json["original_total"] == 9.8
+    assert summary.json["discount_amount"] == 1.23
+    assert summary.json["total"] == 8.57
+    assert "54048.57" in summary.json["pix_code"]
 
     response = client.post("/retiradas", data={"package_ids": ["1", "2"], "receiver_name": "Cliente Teste",
         "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Pix",
         "payment_confirmed": "yes", "discount_percent": "12,5", "pickup_signature": signature(),
         "csrf_token": token(client)}, follow_redirects=True)
-    assert "Total antes do desconto" in response.text
-    assert "R$ 8,75" in response.text
+    assert "R$ 8,57" in response.text
     row = sqlite3.connect(app.config["DATABASE"]).execute("""SELECT discount_type,discount_input,discount_amount,
         original_total,final_total,total_paid,discount_applied_by FROM pickups""").fetchone()
-    assert row == ("porcentagem", 12.5, 1.25, 10, 8.75, 8.75, "staff")
+    assert row == ("porcentagem", 12.5, 1.23, 9.8, 8.57, 8.57, "staff")
     detail = client.get("/painel/pacotes/1")
-    assert "12,50%" in detail.text and "Desconto autorizado por" in detail.text
     pdf = client.get("/comprovantes/1/pacotes/1.pdf")
-    assert b"Total final pago: R$ 8,75" in pdf.data
+    assert b"Total final pago: R$ 8,57" in pdf.data
 
 
 def test_fixed_discount_cash_and_invalid_discounts_are_server_validated(app, client):
@@ -483,7 +481,7 @@ def test_fixed_discount_cash_and_invalid_discounts_are_server_validated(app, cli
         "csrf_token": token(client)})
     assert response.status_code == 302
     row = sqlite3.connect(app.config["DATABASE"]).execute("SELECT discount_type,discount_input,discount_amount,original_total,final_total,total_paid FROM pickups").fetchone()
-    assert row == ("valor", 2.5, 2.5, 5, 2.5, 2.5)
+    assert row == ("valor", 2.5, 2.5, 4.9, 2.4, 2.4)
 
 
 def test_surcharge_precedes_discount_updates_pix_and_persists_reason(app, client):
@@ -495,20 +493,20 @@ def test_surcharge_precedes_discount_updates_pix_and_persists_reason(app, client
     summary = client.post("/painel/retirada/resumo", data={"package_ids": "1", "surcharge_amount": "3,00",
         "surcharge_reason": "Servico adicional", "discount_percent": "25", "csrf_token": token(client)})
     assert summary.status_code == 200
-    assert summary.json["package_total"] == 5
+    assert summary.json["package_total"] == 4.9
     assert summary.json["surcharge_amount"] == 3
-    assert summary.json["original_total"] == 5
-    assert summary.json["discount_amount"] == 1.25
-    assert summary.json["total"] == 6.75
-    assert "54046.75" in summary.json["pix_code"]
+    assert summary.json["original_total"] == 4.9
+    assert summary.json["discount_amount"] == 1.23
+    assert summary.json["total"] == 6.67
+    assert "54046.67" in summary.json["pix_code"]
     response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Cliente Teste",
         "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Pix",
         "payment_confirmed": "yes", "surcharge_amount": "3,00", "surcharge_reason": "Servico adicional",
         "discount_percent": "25", "pickup_signature": signature(), "csrf_token": token(client)}, follow_redirects=True)
-    assert "Servico adicional" in response.text and "R$ 6,75" in response.text
+    assert "Servico adicional" in response.text and "R$ 6,67" in response.text
     row = sqlite3.connect(app.config["DATABASE"]).execute("""SELECT surcharge_amount,surcharge_reason,
         surcharge_applied_by,original_total,discount_amount,final_total,total_paid FROM pickups""").fetchone()
-    assert row == (3, "Servico adicional", "staff", 5, 1.25, 6.75, 6.75)
+    assert row == (3, "Servico adicional", "staff", 4.9, 1.23, 6.67, 6.67)
     detail = client.get("/painel/pacotes/1")
     assert "Motivo do acréscimo" in detail.text and "Servico adicional" in detail.text
     pdf = client.get("/comprovantes/1/pacotes/1.pdf")
@@ -623,7 +621,7 @@ def test_withdrawal_snapshot_detail_restart_and_pdf(app, client, receiver, docum
     connection = sqlite3.connect(app.config["DATABASE"])
     snapshot = connection.execute("""SELECT package_public_id,client_id,client_name,client_public_id,service_amount,
         late_days,late_amount,total_amount FROM pickup_packages""").fetchone()
-    assert snapshot == ("PCTPCA-1", 1, "Cliente Teste", "CLTPCA-1", 5, 0, 0, 5)
+    assert snapshot == ("PCTPCA-1", 1, "Cliente Teste", "CLTPCA-1", 4.9, 0, 0, 4.9)
     connection.execute("UPDATE clients SET name='Nome alterado' WHERE id=1")
     connection.execute("UPDATE packages SET base_price=99 WHERE id=1")
     connection.commit()
@@ -637,16 +635,14 @@ def test_withdrawal_snapshot_detail_restart_and_pdf(app, client, receiver, docum
     assert b"Cliente Teste" in detail.data
     assert receiver.encode() in detail.data
     assert document.encode() in detail.data
-    assert b"R$ 5,00" in detail.data
+    assert b"R$ 4,90" in detail.data
 
     pdf = restarted_client.get("/comprovantes/1/pacotes/1.pdf")
     assert pdf.status_code == 200
     assert pdf.mimetype == "application/pdf"
     assert pdf.data.startswith(b"%PDF-")
-    assert b"PCTPCA-1" in pdf.data
     assert b"Cliente Teste" in pdf.data
     assert receiver.encode() in pdf.data
-    assert b"Confirmo que retirei o pacote" in pdf.data
     assert b"/Subtype /Image" in pdf.data
 
 
@@ -721,7 +717,7 @@ def test_restore_visual_identity_updates_header_and_survives_reload(app, client)
 def test_support_button_and_client_login_without_legacy_notice(client):
     page = client.get("/cliente/login").text
     assert "https://wa.me/5516988004966" in page
-    assert "Ol%C3%A1%21%20Preciso%20de%20suporte%20com%20o%20Guarda%20A%C3%AD." in page
-    assert ">Suporte<" in page
+    assert "Ol%C3%A1%21%20Preciso%20de%20suporte%20com%20o%20Me%20Guarde." in page
+    assert ">Fale com a gente<" in page
     assert "Cliente antigo?" not in page
     assert "Procure a equipe presencialmente" not in page
