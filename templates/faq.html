@@ -1,0 +1,22 @@
+{% extends 'base.html' %}{% block title %}Dúvidas frequentes · Me Guarde{% endblock %}{% block content %}<section class="document faq"><span class="eyebrow">AJUDA</span><h1>Dúvidas frequentes</h1>
+{% set items=[
+('Como faço meu cadastro?','Informe seus dados, leia e aceite o contrato, assine na tela e confirme o código recebido por WhatsApp ou e-mail. Ao concluir, você receberá um código de cliente, como CLTPCA-1.'),
+('Qual endereço devo colocar nas minhas compras?','Use Rua Afonso Borges de Freitas, 795, Jardim Adelinha, Franca – SP, com o CEP informado no sistema. Inclua seu nome completo e código de cliente.'),
+('Para que serve meu endereço residencial?','Ele faz parte do cadastro obrigatório e poderá ser utilizado para encaminhar seus pacotes caso não sejam retirados no prazo previsto no contrato.'),
+('Quais tamanhos e pesos são aceitos?','Pequeno: soma até 80 cm e peso até 10 kg — R$ 4,90. Grande: soma até 150 cm e peso até 20 kg — R$ 9,90. Acima de 150 cm ou 20 kg, não será recebido.'),
+('O valor é cobrado por compra ou por pacote?','A cobrança é por pacote recebido.'),
+('Como saberei que meu pacote chegou?','Você receberá aviso pelo WhatsApp cadastrado e poderá acompanhar na Área do Cliente.'),
+('Qual é o prazo para retirar sem taxa adicional?','São 4 dias corridos, contando o dia da confirmação do aviso como o primeiro dia.'),
+('Quando começa a cobrança por atraso?','A partir do quinto dia, R$ 0,50 por dia corrido e por pacote, inclusive dias fechados.'),
+('Um novo lembrete reinicia meu prazo?','Não. O prazo continua contando a partir da confirmação do primeiro aviso.'),
+('Quais são os horários de retirada?','Segunda a sexta, 09h às 20h; sábado, 09h às 12h.'),
+('O que preciso apresentar para retirar?','Documento oficial com foto, como RG ou CNH. O número do CPF isolado não substitui a identificação.'),
+('Outra pessoa pode retirar por mim?','Sim, mediante autorização verificável. A pessoa apresenta o próprio documento oficial com foto e assina a retirada.'),
+('Como posso pagar?','Por Pix ou dinheiro. O atendente confere o recebimento antes de concluir.'),
+('O que acontece se eu não retirar em 10 dias?','A partir do décimo primeiro dia, o ponto poderá encaminhar o pacote ao endereço residencial, conforme o contrato.'),
+('Como será escolhido o frete?','Pelo menor valor disponível entre modalidades compatíveis; o comprovante da despesa será disponibilizado.'),
+('Quais produtos não são aceitos?','Produtos ilícitos ou proibidos, armas, munições, explosivos, inflamáveis, substâncias perigosas, animais vivos ou itens que exijam refrigeração.'),
+('Posso alterar meu telefone, e-mail ou endereço?','Sim. Acesse seus dados na Área do Cliente.'),
+('Esqueci minha senha. Como recupero?','Clique em “Esqueci minha senha”, escolha um contato cadastrado, confirme o código e crie nova senha.'),
+('Onde encontro meu contrato e os comprovantes?','Na Área do Cliente, para consulta e download dos seus documentos.') ] %}
+{% for question,answer in items %}<details><summary>{{ question }}</summary><p>{{ answer }}</p></details>{% endfor %}</section>{% endblock %}

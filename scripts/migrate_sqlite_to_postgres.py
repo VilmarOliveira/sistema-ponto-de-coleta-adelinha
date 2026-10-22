@@ -1,0 +1,66 @@
+"""Copia dados do SQLite local para PostgreSQL sem apagar ou sobrescrever linhas.
+
+Uso: defina DATABASE_URL e execute este arquivo passando opcionalmente o caminho
+do SQLite. Faça backup antes. Conflitos de chave são mantidos no destino.
+"""
+import os
+import sqlite3
+import sys
+from pathlib import Path
+
+from app import DatabaseConnection, init_db
+
+
+TABLES = (
+    "clients", "packages", "pickups", "pickup_packages", "password_tokens",
+    "login_attempts", "audit_logs", "settings",
+)
+
+
+def migrate(source_path, database_url):
+    init_db(database_url)
+    source = sqlite3.connect(source_path)
+    source.row_factory = sqlite3.Row
+    target = DatabaseConnection(database_url)
+    try:
+        for table in TABLES:
+            source_columns = [row[1] for row in source.execute(f"PRAGMA table_info({table})")]
+            if not source_columns:
+                continue
+            target_columns = {
+                row["column_name"] for row in target.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=?",
+                    (table,),
+                ).fetchall()
+            }
+            columns = [column for column in source_columns if column in target_columns]
+            placeholders = ",".join("?" for _ in columns)
+            column_sql = ",".join(columns)
+            for row in source.execute(f"SELECT {column_sql} FROM {table}"):
+                target.execute(
+                    f"INSERT INTO {table} ({column_sql}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",
+                    tuple(row[column] for column in columns),
+                )
+        for table in ("clients", "packages", "pickups", "password_tokens", "login_attempts", "audit_logs"):
+            target.execute(
+                "SELECT setval(pg_get_serial_sequence(?, 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM " + table,
+                (table,),
+            )
+        target.commit()
+    except Exception:
+        target.rollback()
+        raise
+    finally:
+        source.close()
+        target.close()
+
+
+if __name__ == "__main__":
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        raise SystemExit("Defina DATABASE_URL com a conexão do Neon antes de continuar.")
+    path = Path(sys.argv[1] if len(sys.argv) > 1 else "data/adelinha.db")
+    if not path.is_file():
+        raise SystemExit(f"Banco SQLite não encontrado: {path}")
+    migrate(path, url)
+    print("Migração concluída sem apagar registros existentes no PostgreSQL.")

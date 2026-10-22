@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="card">
+  <span class="eyebrow">CONFIGURAÇÕES</span><h1>Envio de códigos</h1>
+  <p>Esta tela não exibe tokens, senhas nem códigos.</p>
+  <div class="grid two">
+    <div class="notice"><b>E-mail</b><p>{{ 'Configurado' if status.email else 'Configuração incompleta' }}</p></div>
+    <div class="notice"><b>WhatsApp</b><p>{{ 'Configurado' if status.whatsapp else 'Configuração incompleta' }}</p></div>
+  </div>
+  <h2>Últimas tentativas</h2>
+  <div class="table-wrap"><table><thead><tr><th>Data</th><th>Canal</th><th>Destino</th><th>Retorno do provedor</th></tr></thead><tbody>
+  {% for item in records %}<tr><td>{{ item.created_at|local_datetime }}</td><td>{{ item.channel }}</td><td>{{ item.destination }}</td><td>{{ item.provider_status }}</td></tr>{% else %}<tr><td colspan="4">Nenhuma tentativa registrada.</td></tr>{% endfor %}
+  </tbody></table></div>
+  <a class="button ghost bottom-back" href="{{ url_for('dashboard') }}">← Voltar ao painel</a>
+</section>
+{% endblock %}
