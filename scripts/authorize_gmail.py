@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 SCOPE = "https://www.googleapis.com/auth/gmail.send"
-SENDER = "vilmar920@gmail.com"
+SENDER = "pontodecoletaadelinha@gmail.com"
 
 
 def load_client(path):
@@ -46,7 +46,7 @@ def authorize(client):
         "response_type": "code", "scope": SCOPE, "access_type": "offline", "prompt": "consent",
         "state": state, "include_granted_scopes": "false", "login_hint": SENDER})
     url = "https://accounts.google.com/o/oauth2/v2/auth?" + query
-    print("Abrindo o navegador para autorizar somente gmail.send...")
+    print(f"Abrindo o navegador para autorizar {SENDER} somente com gmail.send...")
     if not webbrowser.open(url):
         print("Abra manualmente este endereço no navegador:\n" + url)
     server.handle_request(); server.server_close()

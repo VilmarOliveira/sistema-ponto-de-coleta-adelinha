@@ -8,7 +8,7 @@ from scripts import authorize_gmail
 
 def test_authorizer_requests_only_gmail_send():
     assert authorize_gmail.SCOPE == "https://www.googleapis.com/auth/gmail.send"
-    assert authorize_gmail.SENDER == "vilmar920@gmail.com"
+    assert authorize_gmail.SENDER == "pontodecoletaadelinha@gmail.com"
 
 
 def test_authorizer_accepts_only_desktop_credentials(tmp_path):

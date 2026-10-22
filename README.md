@@ -67,7 +67,7 @@ Copie a conexão no painel do Neon e cadastre-a como segredo `DATABASE_URL`; nun
 
 ### Envio de e-mail pela Gmail API (HTTPS)
 
-Os códigos de recuperação, confirmação de contrato e lembretes por e-mail são enviados pela Gmail API usando exclusivamente o remetente `vilmar920@gmail.com`. O servidor renova o token de acesso automaticamente com o Refresh Token e só informa sucesso quando a Gmail API devolve um ID de mensagem. Nenhum teste automatizado envia mensagens reais.
+Os códigos de recuperação, confirmação de contrato e lembretes por e-mail são enviados pela Gmail API usando exclusivamente o remetente `pontodecoletaadelinha@gmail.com`. O cabeçalho usa o nome **Ponto de Coleta Adelinha**, as respostas são direcionadas à mesma conta e todas as mensagens recebem a assinatura **Me Guarde — Comprou? Deixa com a gente.** O servidor renova o token de acesso automaticamente com o Refresh Token e só informa sucesso quando a Gmail API devolve um ID de mensagem. Nenhum teste automatizado envia mensagens reais.
 
 #### 1. Gerar a autorização no Windows
 
@@ -77,9 +77,13 @@ Não envie o JSON OAuth ao GitHub. No **CMD**, dentro da pasta do projeto, execu
 .venv-local\Scripts\python.exe scripts\authorize_gmail.py "C:\caminho\para\client_secret.json"
 ```
 
-O script abre o navegador, solicita somente `gmail.send`, pede autorização para `vilmar920@gmail.com` e cria `gmail-render.env` na pasta atual. Ele **não envia e-mail**. O arquivo contém segredos, já está ignorado pelo Git e não deve ser compartilhado. Se o ambiente virtual ainda não existir, execute `iniciar.bat` uma vez e feche o servidor antes do comando acima.
+O script abre o navegador, solicita somente `gmail.send`, pede autorização para `pontodecoletaadelinha@gmail.com` e cria `gmail-render.env` na pasta atual. Ele **não envia e-mail**. O arquivo contém segredos, já está ignorado pelo Git e não deve ser compartilhado. Se o ambiente virtual ainda não existir, execute `iniciar.bat` uma vez e feche o servidor antes do comando acima.
 
-Se o aplicativo OAuth estiver em modo de teste, inclua `vilmar920@gmail.com` como usuário de teste no Google Cloud. Se o Google não devolver um Refresh Token, revogue o acesso anterior da aplicação na Conta Google e execute o comando novamente.
+Se o aplicativo OAuth estiver em modo de teste, mantenha `pontodecoletaadelinha@gmail.com` como usuário de teste. Como o projeto é **Externo** e está em **Testing**, o Google limita a sete dias o Refresh Token emitido para `gmail.send`; nesse estado será necessário autorizar novamente e substituir `GMAIL_REFRESH_TOKEN` quando ele expirar. Para uso contínuo, revise os requisitos do Google e altere o status de publicação para **In production**. Isso evita a expiração específica de sete dias, mas não torna o token permanente: ele ainda pode ser revogado, ficar sem uso por longo período ou ser invalidado por mudanças na conta. O sistema trata essa situação como falha, sem expor o token.
+
+Se o Google não devolver um Refresh Token, revogue o acesso anterior da aplicação na Conta Google e execute o comando novamente.
+
+**Substituir a autorização antiga de `vilmar920@gmail.com`:** execute o script com o JSON do projeto “Me Guarde - PCA”, escolha `pontodecoletaadelinha@gmail.com` no navegador e substitua, na mesma atualização do Render, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` e `GMAIL_SENDER`. Não reutilize Client ID, Client Secret ou Refresh Token da conta antiga. Depois de confirmar o novo envio, revogue o acesso antigo na Conta Google e remova qualquer cópia local antiga do arquivo de autorização.
 
 #### 2. Configurar no Render
 
@@ -90,7 +94,7 @@ Se o aplicativo OAuth estiver em modo de teste, inclua `vilmar920@gmail.com` com
 GMAIL_CLIENT_ID=valor gerado pelo script
 GMAIL_CLIENT_SECRET=valor gerado pelo script
 GMAIL_REFRESH_TOKEN=valor gerado pelo script
-GMAIL_SENDER=vilmar920@gmail.com
+GMAIL_SENDER=pontodecoletaadelinha@gmail.com
 ```
 
 3. Não use aspas e não inclua espaços antes ou depois dos valores.

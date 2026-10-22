@@ -19,7 +19,7 @@ def gmail_environment(monkeypatch):
     monkeypatch.setenv("GMAIL_CLIENT_ID", "client-id")
     monkeypatch.setenv("GMAIL_CLIENT_SECRET", "client-secret")
     monkeypatch.setenv("GMAIL_REFRESH_TOKEN", "refresh-token")
-    monkeypatch.setenv("GMAIL_SENDER", "vilmar920@gmail.com")
+    monkeypatch.setenv("GMAIL_SENDER", "pontodecoletaadelinha@gmail.com")
 
 
 def test_gmail_refreshes_token_and_sends_encoded_message(monkeypatch):
@@ -36,9 +36,12 @@ def test_gmail_refreshes_token_and_sends_encoded_message(monkeypatch):
         payload = json.loads(request.data)
         raw = base64.urlsafe_b64decode(payload["raw"] + "==")
         email = message_from_bytes(raw)
-        assert email["From"] == "vilmar920@gmail.com"
+        assert email["From"] == "Ponto de Coleta Adelinha <pontodecoletaadelinha@gmail.com>"
+        assert email["Reply-To"] == "pontodecoletaadelinha@gmail.com"
         assert email["To"] == "cliente@example.com"
         assert "123456" in email.get_payload(decode=True).decode("utf-8")
+        assert "Me Guarde" in email.get_payload(decode=True).decode("utf-8")
+        assert "Comprou? Deixa com a gente." in email.get_payload(decode=True).decode("utf-8")
         return Response({"id": "gmail-message-1", "labelIds": ["SENT"]})
     monkeypatch.setattr(notifications, "urlopen", fake_open)
     ok, detail = notifications.send_code("email", "cliente@example.com", "123456")

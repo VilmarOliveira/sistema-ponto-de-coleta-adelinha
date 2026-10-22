@@ -4,12 +4,15 @@ import json
 import os
 import re
 from email.message import EmailMessage
+from email.utils import formataddr
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
-GMAIL_SENDER = "vilmar920@gmail.com"
+GMAIL_SENDER = "pontodecoletaadelinha@gmail.com"
+GMAIL_DISPLAY_NAME = "Ponto de Coleta Adelinha"
+EMAIL_SIGNATURE = "Me Guarde — Comprou? Deixa com a gente."
 
 
 def notification_config_status():
@@ -79,8 +82,9 @@ def send_email(destination, subject, body):
     if not access_token:
         return False, error
     mail = EmailMessage()
-    mail["From"], mail["To"], mail["Subject"] = GMAIL_SENDER, destination, subject
-    mail.set_content(body)
+    mail["From"] = formataddr((GMAIL_DISPLAY_NAME, GMAIL_SENDER))
+    mail["Reply-To"], mail["To"], mail["Subject"] = GMAIL_SENDER, destination, subject
+    mail.set_content(f"{body.rstrip()}\n\n{EMAIL_SIGNATURE}\n")
     raw = base64.urlsafe_b64encode(mail.as_bytes()).decode("ascii")
     request = Request("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
         data=json.dumps({"raw": raw}).encode("utf-8"),
