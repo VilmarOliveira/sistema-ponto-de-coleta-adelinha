@@ -50,11 +50,11 @@ Os testes cobrem proteção do painel, limites exatos das categorias, bloqueio d
 
 ### Personalização e equipe
 
-Na **Área do Ponto**, administradores podem abrir **Configurações**, **Banners** e **Aparência**. Os banners (até três imagens PNG, JPG ou WebP de no máximo 300 KB) e os temas ficam no mesmo banco PostgreSQL/Neon, por isso sobrevivem a novos deploys sem disco do Render. O administrador principal também pode abrir **Usuários** para criar acessos individuais e definir permissão para clientes, pacotes e retiradas.
+Na **Área do Ponto**, as opções ficam agrupadas em **Configurações**. Administradores podem gerenciar identidade visual, banners, fotos reais do local, aparência, Pix e integrações. Os banners (até três imagens PNG, JPG ou WebP de no máximo 300 KB), fotos e temas ficam no mesmo banco PostgreSQL/Neon, por isso sobrevivem a novos deploys sem disco do Render.
 
-Crie e teste ao menos uma conta marcada como **Administrador principal** antes de desativar o acesso administrativo anterior. O sistema bloqueia a desativação do último administrador principal ativo. Não coloque credenciais pessoais no código ou em variáveis versionadas.
+Crie uma conta de **Administrador**, saia e confirme um login nela antes de excluir o acesso administrativo anterior. O sistema bloqueia a exclusão, desativação ou mudança de perfil que deixaria o sistema sem administrador ativo. Os perfis Gerente e Atendente recebem apenas permissões operacionais; contas desativadas ou excluídas têm suas sessões invalidadas. Não coloque credenciais pessoais no código ou em variáveis versionadas.
 
-A recuperação de senha de clientes e da equipe ocorre **somente pelo e-mail já cadastrado**, usando a configuração Gmail abaixo. WhatsApp continua disponível para suporte, avisos manuais de chegada e, enquanto previsto no fluxo contratual, confirmação da assinatura — nunca para redefinir senha.
+A confirmação do contrato e a recuperação de senha de clientes e da equipe ocorrem **somente pelo e-mail cadastrado**, usando a configuração Gmail abaixo. WhatsApp continua disponível somente para suporte e avisos manuais de chegada; o servidor rejeita solicitações diretas de códigos por WhatsApp.
 
 O endpoint `http://localhost:5000/health` deve responder `{"status":"ok"}` quando o servidor e o banco estiverem funcionando.
 
@@ -244,7 +244,7 @@ O Render continua usando somente a variável `DATABASE_URL` configurada no paine
 
 ## Integrações externas da versão consolidada
 
-A confirmação real de códigos exige `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` e `GMAIL_SENDER` para e-mail pela Gmail API, ou as variáveis documentadas de WhatsApp Cloud API. Sem elas o sistema informa indisponibilidade e nunca simula validação. Configure também `STAFF_NAME`, `PICKUP_CEP` e `PRIVACY_CONTACT` antes de liberar o novo contrato; os valores padrão correspondem aos dados já informados do estabelecimento.
+A confirmação real de códigos exige `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` e `GMAIL_SENDER` para envio exclusivo por e-mail pela Gmail API. Sem elas o sistema informa indisponibilidade e nunca simula validação. Configure também `STAFF_NAME`, `PICKUP_CEP` e `PRIVACY_CONTACT` antes de liberar o novo contrato; os valores padrão correspondem aos dados já informados do estabelecimento.
 
 O lembrete do terceiro dia deve executar `python scripts/send_reminders.py` uma vez por dia em um Render Cron Job ou serviço equivalente independente do processo web. O job é idempotente por pacote, revalida o status antes do envio e registra aceite ou falha do provedor. Render Cron e provedores de e-mail/WhatsApp podem ter custos conforme o plano; nenhum serviço é contratado automaticamente.
 

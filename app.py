@@ -5,6 +5,7 @@ import base64
 import math
 import re
 import json
+import html
 from email.utils import parseaddr
 from decimal import Decimal
 from io import BytesIO
@@ -55,6 +56,37 @@ def validated_image_type(data, maximum_bytes):
             return {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}.get(image.format)
     except (UnidentifiedImageError, OSError, ValueError):
         return None
+
+
+def format_blog_body(value):
+    """Converte a formatação simples do editor em HTML seguro e legível."""
+    lines = html.unescape(value or "").splitlines()
+    output, paragraph, list_items = [], [], []
+
+    def flush_paragraph():
+        if paragraph:
+            output.append(f"<p>{'<br>'.join(str(escape(line)) for line in paragraph)}</p>")
+            paragraph.clear()
+
+    def flush_list():
+        if list_items:
+            output.append("<ul>" + "".join(f"<li>{escape(item)}</li>" for item in list_items) + "</ul>")
+            list_items.clear()
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            flush_paragraph(); flush_list()
+        elif line.startswith("### "):
+            flush_paragraph(); flush_list(); output.append(f"<h3>{escape(line[4:])}</h3>")
+        elif line.startswith("## "):
+            flush_paragraph(); flush_list(); output.append(f"<h2>{escape(line[3:])}</h2>")
+        elif line.startswith("- "):
+            flush_paragraph(); list_items.append(line[2:].strip())
+        else:
+            flush_list(); paragraph.append(line)
+    flush_paragraph(); flush_list()
+    return "".join(output)
 
 
 def terms_text():
@@ -113,14 +145,14 @@ def create_app(test_config=None):
 
     def current_staff():
         if session.get("staff_user_id"):
-            return db().execute("SELECT id,name,email,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups FROM staff_users WHERE id=?", (session["staff_user_id"],)).fetchone()
+            return db().execute("SELECT id,name,email,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,session_version,deleted_at FROM staff_users WHERE id=?", (session["staff_user_id"],)).fetchone()
         return None
 
     def login_required(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
             staff = current_staff()
-            if session.get("staff_user_id") and (not staff or not staff["active"]):
+            if session.get("staff_user_id") and (not staff or not staff["active"] or staff["deleted_at"] or staff["session_version"] != session.get("staff_session_version")):
                 session.clear()
             if not session.get("staff"):
                 return redirect(url_for("login", next=request.path))
@@ -142,7 +174,7 @@ def create_app(test_config=None):
         @login_required
         def wrapped(*args, **kwargs):
             staff = current_staff()
-            if session.get("staff_user_id") and not (staff and staff["is_primary"] and staff["can_users"]):
+            if session.get("staff_user_id") and not (staff and staff["role"] == "administrador" and staff["can_users"]):
                 abort(403)
             return view(*args, **kwargs)
         return wrapped
@@ -286,7 +318,16 @@ def create_app(test_config=None):
     @app.get("/")
     def index():
         banners = db().execute("SELECT id,alt_text,position,updated_at FROM site_banners ORDER BY position,id LIMIT 3").fetchall()
-        return render_template("index.html", banners=banners)
+        photos = db().execute("SELECT id,kind,alt_text,position,updated_at FROM site_photos ORDER BY position,id LIMIT 3").fetchall()
+        return render_template("index.html", banners=banners, photos=photos)
+
+    @app.get("/painel/configuracoes")
+    @login_required
+    def settings_hub():
+        staff = current_staff()
+        if session.get("staff_user_id") and not (staff and (staff["can_settings"] or staff["can_users"])):
+            abort(403)
+        return render_template("settings_hub.html")
 
     @app.get("/duvidas-frequentes")
     def faq():
@@ -308,6 +349,7 @@ def create_app(test_config=None):
         if request.method == "POST":
             if request.form.get("restore") == "yes":
                 db().execute("UPDATE settings SET header_image=NULL,header_image_mime=NULL WHERE id=1")
+                audit("restaurar_identidade_visual", "configuracao", 1)
             else:
                 upload = request.files.get("image")
                 data = upload.read(5 * 1024 * 1024 + 1) if upload else b""
@@ -316,6 +358,7 @@ def create_app(test_config=None):
                     flash("Envie uma imagem PNG, JPG ou WebP de até 5 MB.", "error")
                     return render_template("visual_identity.html"), 400
                 db().execute("UPDATE settings SET header_image=?,header_image_mime=? WHERE id=1", (data, mime))
+                audit("alterar_identidade_visual", "configuracao", 1)
             db().commit()
             flash("Identidade visual alterada com sucesso!", "success")
             return redirect(url_for("visual_identity"))
@@ -358,6 +401,36 @@ def create_app(test_config=None):
         banners=db().execute("SELECT id,alt_text,position,updated_at FROM site_banners ORDER BY position").fetchall()
         return render_template("banner_settings.html", banners=banners)
 
+    @app.get("/fotos/<int:photo_id>/imagem")
+    def site_photo_image(photo_id):
+        photo=db().execute("SELECT image,mime_type FROM site_photos WHERE id=?",(photo_id,)).fetchone()
+        if not photo: abort(404)
+        return Response(bytes(photo["image"]),mimetype=photo["mime_type"],headers={"Cache-Control":"public,max-age=3600"})
+
+    @app.route("/painel/configuracoes/fotos", methods=["GET", "POST"])
+    @admin_required
+    def site_photos_settings():
+        if request.method == "POST":
+            try: photo_id=int(request.form.get("photo_id","0")); position=int(request.form.get("position","1"))
+            except ValueError: photo_id,position=0,0
+            if request.form.get("action") == "remove":
+                db().execute("DELETE FROM site_photos WHERE id=?",(photo_id,)); audit("remover_foto_local","foto",photo_id); db().commit(); flash("Foto removida.","success"); return redirect(url_for("site_photos_settings"))
+            alt=request.form.get("alt_text","").strip(); kind=request.form.get("kind","")
+            upload=request.files.get("image"); data=upload.read(500*1024+1) if upload and upload.filename else b""
+            mime=validated_image_type(data,500*1024) if data else None
+            existing=db().execute("SELECT id FROM site_photos WHERE id=?",(photo_id,)).fetchone() if photo_id else None
+            count=db().execute("SELECT COUNT(id) total FROM site_photos").fetchone()["total"]
+            conflict=db().execute("SELECT id FROM site_photos WHERE position=? AND id!=?",(position,photo_id)).fetchone()
+            if kind not in ("Fachada","Armazenamento","Atendimento") or position not in (1,2,3) or not alt or conflict or (not existing and count>=3) or (not existing and not data) or (data and not mime):
+                flash("Confira tipo, ordem, descrição e imagem PNG, JPG ou WebP de até 500 KB.","error"); return redirect(url_for("site_photos_settings"))
+            stamp=now().isoformat()
+            if existing and data: db().execute("UPDATE site_photos SET kind=?,image=?,mime_type=?,alt_text=?,position=?,updated_at=? WHERE id=?",(kind,data,mime,alt,position,stamp,photo_id))
+            elif existing: db().execute("UPDATE site_photos SET kind=?,alt_text=?,position=?,updated_at=? WHERE id=?",(kind,alt,position,stamp,photo_id))
+            else: db().execute("INSERT INTO site_photos(kind,image,mime_type,alt_text,position,updated_at) VALUES(?,?,?,?,?,?)",(kind,data,mime,alt,position,stamp))
+            audit("salvar_foto_local","foto",photo_id or None,kind); db().commit(); flash("Foto salva.","success"); return redirect(url_for("site_photos_settings"))
+        photos=db().execute("SELECT id,kind,alt_text,position,updated_at FROM site_photos ORDER BY position").fetchall()
+        return render_template("site_photos_settings.html",photos=photos)
+
     @app.route("/painel/configuracoes/aparencia", methods=["GET", "POST"])
     @admin_required
     def appearance_settings():
@@ -370,6 +443,12 @@ def create_app(test_config=None):
                 theme_id=int(request.form.get("theme_id","0")); found=db().execute("SELECT id FROM site_themes WHERE id=?",(theme_id,)).fetchone()
                 if not found: abort(404)
                 db().execute("UPDATE settings SET active_theme_id=? WHERE id=1",(theme_id,)); audit("ativar_tema","tema",theme_id); db().commit(); flash("Tema ativado.","success"); return redirect(url_for("appearance_settings"))
+            if action == "delete":
+                theme_id=int(request.form.get("theme_id","0")); found=db().execute("SELECT id FROM site_themes WHERE id=?",(theme_id,)).fetchone()
+                if not found: abort(404)
+                db().execute("UPDATE settings SET active_theme_id=NULL WHERE id=1 AND active_theme_id=?", (theme_id,))
+                db().execute("DELETE FROM site_themes WHERE id=?", (theme_id,)); audit("excluir_tema","tema",theme_id); db().commit()
+                flash("Tema excluído. As cores padrão foram restauradas se ele estava ativo.","success"); return redirect(url_for("appearance_settings"))
             name=request.form.get("name","").strip(); colors={key:request.form.get(key,"").strip().lower() for key in defaults}
             if not name or not all(re.fullmatch(r"#[0-9a-f]{6}",value) for value in colors.values()):
                 flash("Informe um nome e cores válidas no formato hexadecimal.","error"); return render_template("appearance_settings.html",defaults=defaults,themes=[],form=colors),400
@@ -378,60 +457,98 @@ def create_app(test_config=None):
             ratio=(max(lum(colors["text"]),lum(colors["page"]))+.05)/(min(lum(colors["text"]),lum(colors["page"]))+.05)
             if ratio < 4.5:
                 flash("A combinação entre texto e fundo prejudica o contraste; escolha cores mais distintas.","error"); return render_template("appearance_settings.html",defaults=defaults,themes=[],form=colors),400
-            cur=db().execute("INSERT INTO site_themes(name,colors,created_at,created_by) VALUES(?,?,?,?) RETURNING id",(name,json.dumps(colors),now().isoformat(),session.get("staff")))
-            theme_id=cur.fetchone()["id"]; db().execute("UPDATE settings SET active_theme_id=? WHERE id=1",(theme_id,)); audit("criar_tema","tema",theme_id,name); db().commit(); flash("Tema salvo e ativado.","success"); return redirect(url_for("appearance_settings"))
+            theme_id = int(request.form.get("theme_id", "0") or 0)
+            if theme_id:
+                updated=db().execute("UPDATE site_themes SET name=?,colors=? WHERE id=?",(name,json.dumps(colors),theme_id))
+                if updated.rowcount != 1: abort(404)
+                audit("editar_tema","tema",theme_id,name); db().commit(); flash("Alterações do tema salvas.","success")
+            else:
+                cur=db().execute("INSERT INTO site_themes(name,colors,created_at,created_by) VALUES(?,?,?,?) RETURNING id",(name,json.dumps(colors),now().isoformat(),session.get("staff")))
+                theme_id=cur.fetchone()["id"]; db().execute("UPDATE settings SET active_theme_id=? WHERE id=1",(theme_id,)); audit("criar_tema","tema",theme_id,name); db().commit(); flash("Tema salvo e ativado.","success")
+            return redirect(url_for("appearance_settings"))
         themes=db().execute("SELECT id,name,colors FROM site_themes ORDER BY id DESC LIMIT 50").fetchall()
-        return render_template("appearance_settings.html",defaults=defaults,themes=themes,form=defaults)
+        active=db().execute("SELECT active_theme_id FROM settings WHERE id=1").fetchone()["active_theme_id"]
+        edit_id=request.args.get("edit", type=int); edit=next((theme for theme in themes if theme["id"]==edit_id),None)
+        form=json.loads(edit["colors"]) if edit else defaults
+        return render_template("appearance_settings.html",defaults=defaults,themes=themes,form=form,edit=edit,active_theme_id=active)
 
     @app.route("/painel/configuracoes/usuarios", methods=["GET", "POST"])
     @primary_required
     def staff_users():
         if request.method == "POST":
             name=request.form.get("name","").strip(); email=request.form.get("email","").strip().lower(); password=request.form.get("password",""); role=request.form.get("role")
-            if len(name)<3 or not valid_email(email) or len(password)<8 or role not in ("administrador","atendente"):
-                flash("Confira nome, e-mail, perfil e senha de no mínimo 8 caracteres.","error")
+            if len(name)<3 or not valid_email(email) or len(password)<8 or password != request.form.get("password_confirm") or role not in ("administrador","gerente","atendente"):
+                flash("Confira nome, e-mail, perfil e a confirmação da senha de no mínimo 8 caracteres.","error")
             else:
                 try:
                     primary = int(request.form.get("is_primary") == "yes")
                     permissions = tuple(int(role == "administrador" or request.form.get(key) == "yes") for key in ("can_clients", "can_packages", "can_pickups"))
-                    cur=db().execute("INSERT INTO staff_users(name,email,password_hash,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,created_at) VALUES(?,?,?,?,?,1,?,?,?,?,?,?) RETURNING id",(name,email,generate_password_hash(password),role,primary,int(role=="administrador"),primary,*permissions,now().isoformat()))
+                    cur=db().execute("INSERT INTO staff_users(name,email,password_hash,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,created_at,session_version) VALUES(?,?,?,?,?,1,?,?,?,?,?,?,1) RETURNING id",(name,email,generate_password_hash(password),role,primary,int(role=="administrador"),int(role=="administrador"),*permissions,now().isoformat()))
                     uid=cur.fetchone()["id"]; audit("criar_usuario_equipe","usuario_equipe",uid,f"perfil {role}"); db().commit(); flash("Usuário criado.","success")
                 except DatabaseIntegrityError: db().rollback(); flash("Este e-mail já possui acesso.","error")
             return redirect(url_for("staff_users"))
-        users=db().execute("SELECT id,name,email,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,created_at FROM staff_users ORDER BY name").fetchall()
+        users=db().execute("SELECT id,name,email,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,created_at FROM staff_users WHERE deleted_at IS NULL ORDER BY active DESC,name").fetchall()
         legacy=db().execute("SELECT legacy_staff_active FROM settings WHERE id=1").fetchone()
         return render_template("staff_users.html",users=users,legacy_active=legacy["legacy_staff_active"])
 
     @app.post("/painel/configuracoes/usuarios/<int:user_id>/editar")
     @primary_required
     def staff_user_edit(user_id):
-        user=db().execute("SELECT id,is_primary FROM staff_users WHERE id=?",(user_id,)).fetchone()
+        user=db().execute("SELECT id,is_primary,role FROM staff_users WHERE id=? AND deleted_at IS NULL",(user_id,)).fetchone()
         if not user: abort(404)
-        name=request.form.get("name","").strip(); role=request.form.get("role")
-        if len(name)<3 or role not in ("administrador","atendente"): flash("Dados inválidos.","error")
-        elif user["is_primary"] and role!="administrador": flash("O administrador principal deve manter o perfil de administrador.","error")
+        name=request.form.get("name","").strip(); email=request.form.get("email","").strip().lower(); role=request.form.get("role")
+        active_admins=db().execute("SELECT COUNT(id) total FROM staff_users WHERE active=1 AND deleted_at IS NULL AND role='administrador'").fetchone()["total"]
+        if len(name)<3 or not valid_email(email) or role not in ("administrador","gerente","atendente"): flash("Dados inválidos.","error")
+        elif user["role"]=="administrador" and role!="administrador" and active_admins<=1: flash("O sistema deve manter ao menos um administrador ativo.","error")
         else:
             permissions = tuple(int(role == "administrador" or request.form.get(key) == "yes") for key in ("can_clients", "can_packages", "can_pickups"))
-            db().execute("UPDATE staff_users SET name=?,role=?,can_settings=?,can_clients=?,can_packages=?,can_pickups=? WHERE id=?",(name,role,int(role=="administrador"),*permissions,user_id))
-            audit("editar_usuario_equipe","usuario_equipe",user_id,f"perfil {role}"); db().commit(); flash("Usuário atualizado.","success")
+            try:
+                db().execute("UPDATE staff_users SET name=?,email=?,role=?,can_settings=?,can_users=?,can_clients=?,can_packages=?,can_pickups=? WHERE id=?",(name,email,role,int(role=="administrador"),int(role=="administrador"),*permissions,user_id))
+                audit("editar_usuario_equipe","usuario_equipe",user_id,f"perfil {role}"); db().commit(); flash("Usuário atualizado.","success")
+            except DatabaseIntegrityError: db().rollback(); flash("Este e-mail já pertence a outro usuário.","error")
         return redirect(url_for("staff_users"))
 
     @app.post("/painel/configuracoes/usuarios/<int:user_id>/alternar")
     @primary_required
     def staff_user_toggle(user_id):
-        user=db().execute("SELECT id,active,is_primary FROM staff_users WHERE id=?",(user_id,)).fetchone()
+        user=db().execute("SELECT id,active,role FROM staff_users WHERE id=? AND deleted_at IS NULL",(user_id,)).fetchone()
         if not user: abort(404)
         if user["active"]:
-            active_admins=db().execute("SELECT COUNT(id) total FROM staff_users WHERE active=1 AND is_primary=1").fetchone()["total"]
-            if user["is_primary"] and active_admins<=1: flash("Não é possível desativar o último administrador principal.","error"); return redirect(url_for("staff_users"))
-        db().execute("UPDATE staff_users SET active=? WHERE id=?",(0 if user["active"] else 1,user_id)); audit("alterar_acesso_equipe","usuario_equipe",user_id); db().commit(); flash("Acesso atualizado.","success"); return redirect(url_for("staff_users"))
+            active_admins=db().execute("SELECT COUNT(id) total FROM staff_users WHERE active=1 AND deleted_at IS NULL AND role='administrador'").fetchone()["total"]
+            if user["role"]=="administrador" and active_admins<=1: flash("Não é possível desativar o último administrador.","error"); return redirect(url_for("staff_users"))
+        db().execute("UPDATE staff_users SET active=?,session_version=session_version+1 WHERE id=?",(0 if user["active"] else 1,user_id)); audit("alterar_acesso_equipe","usuario_equipe",user_id); db().commit(); flash("Acesso atualizado.","success"); return redirect(url_for("staff_users"))
+
+    @app.post("/painel/configuracoes/usuarios/<int:user_id>/excluir")
+    @primary_required
+    def staff_user_delete(user_id):
+        user=db().execute("SELECT id,role,active FROM staff_users WHERE id=? AND deleted_at IS NULL",(user_id,)).fetchone()
+        if not user: abort(404)
+        active_admins=db().execute("SELECT COUNT(id) total FROM staff_users WHERE active=1 AND deleted_at IS NULL AND role='administrador'").fetchone()["total"]
+        if user["role"]=="administrador" and user["active"] and active_admins<=1:
+            flash("Não é possível excluir o último administrador.","error")
+        else:
+            db().execute("UPDATE staff_users SET active=0,deleted_at=?,session_version=session_version+1 WHERE id=?",(now().isoformat(),user_id)); audit("excluir_usuario_equipe","usuario_equipe",user_id); db().commit(); flash("Usuário excluído e sessões encerradas. O histórico foi preservado.","success")
+        return redirect(url_for("staff_users"))
+
+    @app.post("/painel/configuracoes/usuarios/<int:user_id>/recuperar")
+    @primary_required
+    def staff_user_recovery(user_id):
+        account=db().execute("SELECT id,email FROM staff_users WHERE id=? AND active=1 AND deleted_at IS NULL",(user_id,)).fetchone()
+        if not account: abort(404)
+        cutoff=(now()-timedelta(minutes=15)).isoformat(); recent=db().execute("SELECT COUNT(id) total,MAX(created_at) latest FROM staff_recovery_codes WHERE staff_user_id=? AND created_at>=?",(user_id,cutoff)).fetchone()
+        if recent["total"]>=3 or (recent["latest"] and now()-datetime.fromisoformat(recent["latest"])<timedelta(seconds=60)):
+            flash("Aguarde antes de solicitar um novo código.","error"); return redirect(url_for("staff_users"))
+        code=f"{secrets.randbelow(1000000):06d}"; created=now().isoformat(); sent,detail=send_code("email",account["email"],code)
+        db().execute("INSERT INTO staff_recovery_codes(staff_user_id,code_hash,expires_at,provider_status,created_at,used_at) VALUES(?,?,?,?,?,?)",(account["id"],hashlib.sha256(code.encode()).hexdigest(),(now()+timedelta(minutes=10)).isoformat(),detail,created,None if sent else created)); db().commit()
+        flash("O Gmail aceitou o envio do código." if sent else f"Não foi possível enviar o código. {detail}.","success" if sent else "error")
+        return redirect(url_for("staff_users"))
 
     @app.post("/painel/configuracoes/usuarios/desativar-legado")
     @primary_required
     def disable_legacy_staff():
-        principals=db().execute("SELECT COUNT(id) total FROM staff_users WHERE active=1 AND is_primary=1").fetchone()["total"]
-        if not principals: flash("Crie e teste uma conta de administrador principal antes de desativar o acesso anterior.","error")
-        else: db().execute("UPDATE settings SET legacy_staff_active=0 WHERE id=1"); audit("desativar_acesso_legado","configuracao",1); db().commit(); flash("Acesso administrativo anterior desativado.","success")
+        principals=db().execute("SELECT COUNT(id) total FROM staff_users WHERE active=1 AND deleted_at IS NULL AND role='administrador' AND last_login_at IS NOT NULL").fetchone()["total"]
+        if not principals: flash("Crie a nova conta de administrador e confirme um login nela antes de desativar o acesso anterior.","error")
+        else: db().execute("UPDATE settings SET legacy_staff_active=0 WHERE id=1"); audit("excluir_acesso_legado","configuracao",1); db().commit(); flash("Acesso administrativo anterior excluído e bloqueado.","success")
         return redirect(url_for("staff_users"))
 
     @app.get("/blog")
@@ -443,7 +560,7 @@ def create_app(test_config=None):
     def blog_post(slug):
         post = db().execute("SELECT slug,title,summary,body,cover_image,cover_alt,seo_title,seo_description,published_at,updated_at FROM blog_posts WHERE slug=? AND status='published'", (slug,)).fetchone()
         if not post: abort(404)
-        return render_template("blog_post.html", post=post)
+        return render_template("blog_post.html", post=post, formatted_body=format_blog_body(post["body"]))
 
     @app.get("/blog/<slug>/capa")
     def blog_cover(slug):
@@ -512,11 +629,15 @@ def create_app(test_config=None):
         residential = residential_address_form()
         confirmation = session.get("registration_confirmation")
         submitted_code = request.form.get("confirmation_code", "")
-        confirmed = bool(confirmation and confirmation.get("cpf") == cpf and confirmation.get("version") == TERMS_VERSION
+        confirmed = bool(confirmation and confirmation.get("cpf") == cpf and confirmation.get("email") == email and confirmation.get("version") == TERMS_VERSION
+            and confirmation.get("attempts", 0) < 5
             and datetime.fromisoformat(confirmation["expires_at"]) > now()
             and secrets.compare_digest(confirmation["code_hash"], hashlib.sha256(submitted_code.encode()).hexdigest()))
         if not app.config.get("TESTING") and not confirmed:
-            flash("Confirme o código enviado ao WhatsApp ou e-mail antes de concluir.", "error")
+            if confirmation:
+                confirmation["attempts"] = confirmation.get("attempts", 0) + 1
+                session["registration_confirmation"] = confirmation
+            flash("Confirme o código enviado ao e-mail antes de concluir.", "error")
             return render_template("index.html", registration_form={**request.form}), 400
         if request.form.get("terms_accept") != "yes":
             flash("É necessário aceitar as condições do serviço.", "error")
@@ -525,7 +646,7 @@ def create_app(test_config=None):
         if not valid_cpf(cpf):
             flash("CPF inválido. Confira os números digitados.", "error")
             return render_template("index.html", registration_form=form), 400
-        if len(name) < 5 or len(phone) < 10 or not valid_email(email) or not signature.startswith("data:image/png;base64,") or len(password) < 8 or password != request.form.get("password_confirm") or not valid_residential_address(residential):
+        if len(name) < 5 or len(phone) < 10 or not email or not valid_email(email) or not signature.startswith("data:image/png;base64,") or len(password) < 8 or password != request.form.get("password_confirm") or not valid_residential_address(residential):
             flash("Confira os dados, o e-mail, o endereço residencial obrigatório, a assinatura e as senhas (mínimo de 8 caracteres).", "error")
             return render_template("index.html", registration_form=form), 400
         accepted_at = now().isoformat()
@@ -555,20 +676,26 @@ def create_app(test_config=None):
 
     @app.post("/cadastro/enviar-codigo")
     def registration_code():
-        cpf, channel = digits(request.form.get("cpf", "")), request.form.get("confirmation_channel")
-        destination = request.form.get("email", "").strip().lower() if channel == "email" else digits(request.form.get("phone", ""))
+        cpf, channel = digits(request.form.get("cpf", "")), "email"
+        if request.form.get("confirmation_channel") not in (None,"","email"):
+            return {"error":"A confirmação do contrato está disponível somente por e-mail."},400
+        destination = request.form.get("email", "").strip().lower()
         previous = session.get("registration_confirmation", {})
+        if previous.get("cpf") != cpf or previous.get("email") != destination:
+            previous = {}
         if previous.get("sends", 0) >= 3:
             return {"error": "Limite de reenvios atingido. Aguarde e tente novamente."}, 429
-        if not valid_cpf(cpf) or channel not in ("email", "whatsapp") or not destination:
-            return {"error": "Confira CPF, canal e contato cadastrado."}, 400
+        if previous.get("sent_at") and now()-datetime.fromisoformat(previous["sent_at"]) < timedelta(seconds=60):
+            return {"error":"Aguarde 60 segundos antes de reenviar o código."},429
+        if not valid_cpf(cpf) or not valid_email(destination) or not destination:
+            return {"error": "Confira o CPF e o e-mail informado."}, 400
         code = f"{secrets.randbelow(1000000):06d}"
         try: sent, detail = send_code(channel, destination, code)
         except Exception: sent, detail = False, "Falha no provedor"
         if not sent: return {"error": f"Envio indisponível: {detail}."}, 503
-        session["registration_confirmation"] = {"cpf":cpf,"version":TERMS_VERSION,"channel":channel,
+        session["registration_confirmation"] = {"cpf":cpf,"email":destination,"version":TERMS_VERSION,"channel":channel,
             "destination":destination,"code_hash":hashlib.sha256(code.encode()).hexdigest(),
-            "expires_at":(now()+timedelta(minutes=10)).isoformat(),"sends":previous.get("sends",0)+1}
+            "expires_at":(now()+timedelta(minutes=10)).isoformat(),"sent_at":now().isoformat(),"attempts":0,"sends":previous.get("sends",0)+1}
         return {"message":"Código enviado. Ele expira em 10 minutos."}
 
     @app.get("/condicoes")
@@ -588,14 +715,16 @@ def create_app(test_config=None):
         if login_blocked("staff", user):
             flash("Muitas tentativas. Aguarde 15 minutos.", "error")
             return redirect(url_for("login"))
-        account = db().execute("SELECT id,name,email,password_hash,role,is_primary,active FROM staff_users WHERE LOWER(email)=?", (user,)).fetchone()
-        valid_account = bool(account and account["active"] and check_password_hash(account["password_hash"], request.form.get("password", "")))
+        account = db().execute("SELECT id,name,email,password_hash,role,is_primary,active,session_version,deleted_at FROM staff_users WHERE LOWER(email)=?", (user,)).fetchone()
+        valid_account = bool(account and account["active"] and not account["deleted_at"] and check_password_hash(account["password_hash"], request.form.get("password", "")))
         legacy_setting = db().execute("SELECT legacy_staff_active FROM settings WHERE id=1").fetchone()
         valid_legacy = bool((not legacy_setting or legacy_setting["legacy_staff_active"]) and user == app.config["STAFF_USER"].lower() and check_password_hash(app.config["STAFF_PASSWORD_HASH"], request.form.get("password", "")))
         record_login("staff", user, valid_account or valid_legacy)
         if valid_account or valid_legacy:
             session.clear(); session["staff"] = account["email"] if valid_account else app.config["STAFF_USER"]
-            if valid_account: session["staff_user_id"] = account["id"]
+            if valid_account:
+                session["staff_user_id"] = account["id"]; session["staff_session_version"] = account["session_version"]
+                db().execute("UPDATE staff_users SET last_login_at=? WHERE id=?",(now().isoformat(),account["id"])); db().commit()
             else: session["staff_legacy"] = True
             return redirect(url_for("dashboard"))
         flash("Usuário ou senha inválidos.", "error")
@@ -604,23 +733,32 @@ def create_app(test_config=None):
     @app.route("/equipe/recuperar-senha", methods=["GET", "POST"])
     def staff_password_recovery():
         if request.method == "GET": return render_template("staff_password_recovery.html", stage="request")
+        if request.form.get("channel") not in (None, "", "email"):
+            flash("A recuperação de senha da equipe está disponível somente por e-mail.", "error")
+            return render_template("staff_password_recovery.html", stage="request"), 400
         stage=request.form.get("stage")
         if stage == "request":
-            email=request.form.get("email","").strip().lower(); account=db().execute("SELECT id,email FROM staff_users WHERE LOWER(email)=? AND active=1",(email,)).fetchone()
+            email=request.form.get("email","").strip().lower(); account=db().execute("SELECT id,email FROM staff_users WHERE LOWER(email)=? AND active=1 AND deleted_at IS NULL",(email,)).fetchone()
             if not account:
                 flash("Se o e-mail estiver cadastrado, enviaremos as instruções.","success"); return render_template("staff_password_recovery.html",stage="confirm")
-            cutoff=(now()-timedelta(minutes=15)).isoformat(); count=db().execute("SELECT COUNT(id) total FROM staff_recovery_codes WHERE staff_user_id=? AND created_at>=?",(account["id"],cutoff)).fetchone()["total"]
-            if count>=3: flash("Limite de envios atingido. Aguarde 15 minutos.","error"); return render_template("staff_password_recovery.html",stage="request"),429
+            cutoff=(now()-timedelta(minutes=15)).isoformat(); recent=db().execute("SELECT COUNT(id) total,MAX(created_at) latest FROM staff_recovery_codes WHERE staff_user_id=? AND created_at>=?",(account["id"],cutoff)).fetchone()
+            if recent["total"]>=3 or (recent["latest"] and now()-datetime.fromisoformat(recent["latest"])<timedelta(seconds=60)):
+                flash("Aguarde antes de solicitar um novo código.","error"); return render_template("staff_password_recovery.html",stage="request"),429
             code=f"{secrets.randbelow(1000000):06d}"; created=now().isoformat(); sent,detail=send_code("email",account["email"],code)
             cur=db().execute("INSERT INTO staff_recovery_codes(staff_user_id,code_hash,expires_at,provider_status,created_at,used_at) VALUES(?,?,?,?,?,?) RETURNING id",(account["id"],hashlib.sha256(code.encode()).hexdigest(),(now()+timedelta(minutes=10)).isoformat(),detail,created,None if sent else created)); code_id=cur.fetchone()["id"]; db().commit()
             if not sent: flash(f"Não foi possível enviar o código. {detail}.","error"); return render_template("staff_password_recovery.html",stage="request"),503
-            session["staff_recovery_id"]=code_id; flash("O Gmail aceitou o envio do código.","success"); return render_template("staff_password_recovery.html",stage="confirm",masked_contact=mask_contact("email",email))
-        row=db().execute("SELECT id,staff_user_id,code_hash,expires_at,attempts,used_at FROM staff_recovery_codes WHERE id=?",(session.get("staff_recovery_id"),)).fetchone() if session.get("staff_recovery_id") else None
+            session["staff_recovery_id"]=code_id; session["staff_recovery_email"]=email; flash("O Gmail aceitou o envio do código.","success"); return render_template("staff_password_recovery.html",stage="confirm",masked_contact=mask_contact("email",email),recovery_email=email)
+        recovery_id=session.get("staff_recovery_id")
+        if recovery_id:
+            row=db().execute("SELECT id,staff_user_id,code_hash,expires_at,attempts,used_at FROM staff_recovery_codes WHERE id=?",(recovery_id,)).fetchone()
+        else:
+            recovery_email=request.form.get("email","").strip().lower()
+            row=db().execute("SELECT rc.id,rc.staff_user_id,rc.code_hash,rc.expires_at,rc.attempts,rc.used_at FROM staff_recovery_codes rc JOIN staff_users su ON su.id=rc.staff_user_id WHERE LOWER(su.email)=? AND su.active=1 AND su.deleted_at IS NULL ORDER BY rc.id DESC LIMIT 1",(recovery_email,)).fetchone()
         password=request.form.get("password",""); valid=bool(row and not row["used_at"] and row["attempts"]<5 and datetime.fromisoformat(row["expires_at"])>now() and secrets.compare_digest(row["code_hash"],hashlib.sha256(request.form.get("code","").encode()).hexdigest()))
         if not valid or len(password)<8 or password!=request.form.get("password_confirm"):
             if row: db().execute("UPDATE staff_recovery_codes SET attempts=attempts+1 WHERE id=?",(row["id"],)); db().commit()
-            flash("Código inválido ou expirado, ou as senhas não conferem.","error"); return render_template("staff_password_recovery.html",stage="confirm"),400
-        db().execute("UPDATE staff_users SET password_hash=? WHERE id=?",(generate_password_hash(password),row["staff_user_id"])); db().execute("UPDATE staff_recovery_codes SET used_at=? WHERE id=?",(now().isoformat(),row["id"])); db().commit(); session.pop("staff_recovery_id",None); flash("Senha alterada com sucesso!","success"); return redirect(url_for("login"))
+            flash("Código inválido ou expirado, ou as senhas não conferem.","error"); return render_template("staff_password_recovery.html",stage="confirm",recovery_email=session.get("staff_recovery_email",request.form.get("email",""))),400
+        db().execute("UPDATE staff_users SET password_hash=?,session_version=session_version+1 WHERE id=?",(generate_password_hash(password),row["staff_user_id"])); db().execute("UPDATE staff_recovery_codes SET used_at=? WHERE id=?",(now().isoformat(),row["id"])); db().commit(); session.pop("staff_recovery_id",None); session.pop("staff_recovery_email",None); flash("Senha alterada com sucesso!","success"); return redirect(url_for("login"))
 
 
     @app.get("/cliente/login")
@@ -648,9 +786,9 @@ def create_app(test_config=None):
                 flash("Este cadastro não possui e-mail disponível. Procure a equipe para atualizar o endereço de e-mail.", "error")
                 return render_template("password_recovery.html", stage="request", entered_cpf=request.form.get("cpf", "")), 400
             cutoff = (now() - timedelta(minutes=15)).isoformat()
-            sent_count = db().execute("SELECT COUNT(id) AS total FROM verification_codes WHERE client_id=? AND purpose='password_recovery' AND created_at>=?", (client["id"], cutoff)).fetchone()["total"]
-            if sent_count >= 3:
-                flash("Limite de envios atingido. Aguarde 15 minutos antes de tentar novamente.", "error")
+            recent = db().execute("SELECT COUNT(id) AS total,MAX(created_at) latest FROM verification_codes WHERE client_id=? AND purpose='password_recovery' AND created_at>=?", (client["id"], cutoff)).fetchone()
+            if recent["total"] >= 3 or (recent["latest"] and now()-datetime.fromisoformat(recent["latest"])<timedelta(seconds=60)):
+                flash("Aguarde antes de solicitar um novo código.", "error")
                 return render_template("password_recovery.html", stage="request", entered_cpf=request.form.get("cpf", "")), 429
             code = f"{secrets.randbelow(1000000):06d}"
             created_at, expires = now().isoformat(), (now() + timedelta(minutes=10)).isoformat()
@@ -664,7 +802,7 @@ def create_app(test_config=None):
                 session["password_recovery_contact"] = mask_contact(channel, destination)
             db().commit()
             if not sent:
-                flash(f"Não foi possível enviar o código. {detail}. Você pode corrigir o canal e tentar novamente.", "error")
+                flash(f"Não foi possível enviar o código por e-mail. {detail}. Confira os dados para tentar novamente.", "error")
                 return render_template("password_recovery.html", stage="request", entered_cpf=request.form.get("cpf", "")), 503
             flash("O provedor aceitou o envio. Confira o contato cadastrado; o código expira em 10 minutos.", "success")
             return render_template("password_recovery.html", stage="confirm", masked_contact=session.get("password_recovery_contact"))
@@ -911,14 +1049,16 @@ def create_app(test_config=None):
                         for row in records]
         return render_template("notification_settings.html", status=notification_config_status(), records=safe_records)
 
-    @app.post("/painel/configuracoes/pix")
-    @login_required
+    @app.route("/painel/configuracoes/pix", methods=["GET","POST"])
+    @admin_required
     def pix_settings():
+        if request.method == "GET":
+            return render_template("pix_settings.html", receiver=PIX_RECEIVER_NAME, pix=PIX_KEY)
         db().execute("UPDATE settings SET pix_receiver_name=? WHERE id=1", (PIX_RECEIVER_NAME,))
         audit("configurar_pix", "configuracao", 1, "nome do recebedor atualizado")
         db().commit()
         flash("Configuração Pix atualizada.", "success")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("pix_settings"))
 
     @app.get("/painel/pacotes/<int:package_id>")
     @login_required
@@ -1279,8 +1419,9 @@ def init_db(database):
         f"CREATE TABLE IF NOT EXISTS verification_codes (id {id_type}, client_id BIGINT NOT NULL REFERENCES clients(id), purpose TEXT NOT NULL, channel TEXT NOT NULL, destination TEXT NOT NULL, code_hash TEXT NOT NULL, expires_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, sends INTEGER NOT NULL DEFAULT 1, provider_status TEXT, created_at TEXT NOT NULL, used_at TEXT)",
         f"CREATE TABLE IF NOT EXISTS reminder_logs (id {id_type}, package_id BIGINT NOT NULL REFERENCES packages(id), channel TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL)",
         f"CREATE TABLE IF NOT EXISTS site_banners (id {id_type}, image BYTEA NOT NULL, mime_type TEXT NOT NULL, alt_text TEXT NOT NULL, position INTEGER NOT NULL UNIQUE, updated_at TEXT NOT NULL)",
+        f"CREATE TABLE IF NOT EXISTS site_photos (id {id_type}, kind TEXT NOT NULL, image BYTEA NOT NULL, mime_type TEXT NOT NULL, alt_text TEXT NOT NULL, position INTEGER NOT NULL UNIQUE, updated_at TEXT NOT NULL)",
         f"CREATE TABLE IF NOT EXISTS site_themes (id {id_type}, name TEXT NOT NULL, colors TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL)",
-        f"CREATE TABLE IF NOT EXISTS staff_users (id {id_type}, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL, is_primary INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, can_settings INTEGER NOT NULL DEFAULT 0, can_users INTEGER NOT NULL DEFAULT 0, can_clients INTEGER NOT NULL DEFAULT 1, can_packages INTEGER NOT NULL DEFAULT 1, can_pickups INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)",
+        f"CREATE TABLE IF NOT EXISTS staff_users (id {id_type}, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL, is_primary INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, can_settings INTEGER NOT NULL DEFAULT 0, can_users INTEGER NOT NULL DEFAULT 0, can_clients INTEGER NOT NULL DEFAULT 1, can_packages INTEGER NOT NULL DEFAULT 1, can_pickups INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, session_version INTEGER NOT NULL DEFAULT 1, deleted_at TEXT, last_login_at TEXT)",
         f"CREATE TABLE IF NOT EXISTS staff_recovery_codes (id {id_type}, staff_user_id BIGINT NOT NULL REFERENCES staff_users(id), code_hash TEXT NOT NULL, expires_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, provider_status TEXT, created_at TEXT NOT NULL, used_at TEXT)",
     ]
     for statement in statements:
@@ -1306,7 +1447,7 @@ def init_db(database):
         "service_amount": "REAL", "late_days": "INTEGER", "total_amount": "REAL",
     })
     ensure_columns(connection, "settings", {"header_image": "BYTEA" if connection.postgres else "BLOB", "header_image_mime": "TEXT", "active_theme_id": "BIGINT", "legacy_staff_active": "INTEGER NOT NULL DEFAULT 1"})
-    ensure_columns(connection, "staff_users", {"can_clients": "INTEGER NOT NULL DEFAULT 1", "can_packages": "INTEGER NOT NULL DEFAULT 1", "can_pickups": "INTEGER NOT NULL DEFAULT 1"})
+    ensure_columns(connection, "staff_users", {"can_clients": "INTEGER NOT NULL DEFAULT 1", "can_packages": "INTEGER NOT NULL DEFAULT 1", "can_pickups": "INTEGER NOT NULL DEFAULT 1", "session_version":"INTEGER NOT NULL DEFAULT 1", "deleted_at":"TEXT", "last_login_at":"TEXT"})
     ensure_columns(connection, "packages", {"reminder_sent_at": "TEXT", "forwarded_at": "TEXT"})
     duplicate_tracking = connection.execute("""SELECT 1 FROM packages WHERE tracking IS NOT NULL AND trim(tracking)!=''
         GROUP BY UPPER(trim(tracking)) HAVING COUNT(*)>1 LIMIT 1""").fetchone()

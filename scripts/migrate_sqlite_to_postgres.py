@@ -13,7 +13,9 @@ from app import DatabaseConnection, init_db
 
 TABLES = (
     "clients", "packages", "pickups", "pickup_packages", "password_tokens",
-    "login_attempts", "audit_logs", "settings",
+    "login_attempts", "audit_logs", "settings", "blog_posts", "verification_codes",
+    "reminder_logs", "site_banners", "site_photos", "site_themes", "staff_users",
+    "staff_recovery_codes",
 )
 
 
@@ -41,7 +43,9 @@ def migrate(source_path, database_url):
                     f"INSERT INTO {table} ({column_sql}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",
                     tuple(row[column] for column in columns),
                 )
-        for table in ("clients", "packages", "pickups", "password_tokens", "login_attempts", "audit_logs"):
+        for table in ("clients", "packages", "pickups", "password_tokens", "login_attempts", "audit_logs",
+                      "blog_posts", "verification_codes", "reminder_logs", "site_banners", "site_photos",
+                      "site_themes", "staff_users", "staff_recovery_codes"):
             target.execute(
                 "SELECT setval(pg_get_serial_sequence(?, 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM " + table,
                 (table,),

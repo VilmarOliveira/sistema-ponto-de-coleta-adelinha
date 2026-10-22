@@ -448,3 +448,11 @@ document.querySelectorAll('[data-banner-upload]').forEach((input) => {
     preview.dataset.objectUrl = url; preview.src = url; preview.hidden = false;
   });
 });
+
+const navToggle = document.querySelector('[data-nav-toggle]');
+const mainNav = document.querySelector('[data-main-nav]');
+navToggle?.addEventListener('click', () => {
+  const open = navToggle.getAttribute('aria-expanded') !== 'true';
+  navToggle.setAttribute('aria-expanded', String(open));
+  mainNav?.classList.toggle('open', open);
+});
