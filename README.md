@@ -65,22 +65,42 @@ export COOKIE_SECURE=1
 
 Copie a conexão no painel do Neon e cadastre-a como segredo `DATABASE_URL`; nunca coloque a URL ou a senha no código, GitHub ou `render.yaml`. Execute atrás de HTTPS com um servidor WSGI, por exemplo `gunicorn 'app:create_app()'`. A inicialização cria somente tabelas e colunas ausentes e não apaga registros. Configure backups no Neon.
 
-### Envio real dos códigos de recuperação
+### Envio de e-mail pela Gmail API (HTTPS)
 
-O sistema **não considera um código enviado quando o provedor falha**. Configure no Render as variáveis abaixo; não coloque os valores no GitHub.
+Os códigos de recuperação, confirmação de contrato e lembretes por e-mail são enviados pela Gmail API usando exclusivamente o remetente `vilmar920@gmail.com`. O servidor renova o token de acesso automaticamente com o Refresh Token e só informa sucesso quando a Gmail API devolve um ID de mensagem. Nenhum teste automatizado envia mensagens reais.
 
-Para e-mail (exemplo comum com STARTTLS na porta 587):
+#### 1. Gerar a autorização no Windows
 
-```text
-SMTP_HOST=servidor-do-provedor
-SMTP_PORT=587
-SMTP_SECURITY=starttls
-SMTP_USER=usuario
-SMTP_PASSWORD=senha-ou-chave-do-aplicativo
-SMTP_FROM=remetente-verificado@seu-dominio
+Não envie o JSON OAuth ao GitHub. No **CMD**, dentro da pasta do projeto, execute exatamente:
+
+```bat
+.venv-local\Scripts\python.exe scripts\authorize_gmail.py "C:\caminho\para\client_secret.json"
 ```
 
-`SMTP_SECURITY` aceita `ssl` (normalmente porta 465), `starttls` (normalmente 587) ou `plain` apenas quando o provedor exigir. Para WhatsApp Cloud API:
+O script abre o navegador, solicita somente `gmail.send`, pede autorização para `vilmar920@gmail.com` e cria `gmail-render.env` na pasta atual. Ele **não envia e-mail**. O arquivo contém segredos, já está ignorado pelo Git e não deve ser compartilhado. Se o ambiente virtual ainda não existir, execute `iniciar.bat` uma vez e feche o servidor antes do comando acima.
+
+Se o aplicativo OAuth estiver em modo de teste, inclua `vilmar920@gmail.com` como usuário de teste no Google Cloud. Se o Google não devolver um Refresh Token, revogue o acesso anterior da aplicação na Conta Google e execute o comando novamente.
+
+#### 2. Configurar no Render
+
+1. Abra o serviço no Render e entre em **Environment**.
+2. Abra localmente `gmail-render.env` e copie cada valor para uma variável secreta de mesmo nome:
+
+```text
+GMAIL_CLIENT_ID=valor gerado pelo script
+GMAIL_CLIENT_SECRET=valor gerado pelo script
+GMAIL_REFRESH_TOKEN=valor gerado pelo script
+GMAIL_SENDER=vilmar920@gmail.com
+```
+
+3. Não use aspas e não inclua espaços antes ou depois dos valores.
+4. Salve as variáveis e aguarde o novo deploy/reinício.
+5. Na Área do Ponto, abra **Envio de códigos** e confirme que E-mail aparece como **Configurado**.
+6. Faça uma única recuperação para um cadastro de teste autorizado e confira o recebimento. A tela registra apenas o retorno seguro da API, nunca tokens ou o código enviado.
+
+Não são mais necessárias variáveis `SMTP_*`. Um retorno “aceito para processamento” significa que a Gmail API aceitou a mensagem; não é uma confirmação de leitura. Se a renovação for revogada, a API estiver indisponível ou rejeitar a mensagem, o sistema apresenta falha e permite tentar novamente, sem informar falsamente que houve envio.
+
+#### WhatsApp Cloud API
 
 ```text
 WHATSAPP_ACCESS_TOKEN=token-permanente
@@ -90,7 +110,7 @@ WHATSAPP_TEMPLATE_LANGUAGE=pt_BR
 WHATSAPP_GRAPH_VERSION=versao-ativa-da-API
 ```
 
-Use em `WHATSAPP_GRAPH_VERSION` uma versão ainda ativa informada no painel/documentação da Meta, incluindo o prefixo `v`; ela não fica fixa no código para evitar interrupções quando uma versão é desativada. O modelo aprovado precisa ter **um parâmetro no corpo**, destinado ao código. O telefone brasileiro é convertido para o formato internacional `55 + DDD + número`. Reinicie o serviço após configurar. A resposta “aceito para processamento” registra apenas a aceitação pelo provedor; entrega efetiva deve ser conferida nos eventos/logs do próprio provedor. Em caso de erro, a tela informa a falha e oferece nova tentativa, limitada a três solicitações em 15 minutos.
+Use em `WHATSAPP_GRAPH_VERSION` uma versão ainda ativa informada no painel/documentação da Meta, incluindo o prefixo `v`. O modelo aprovado precisa ter um parâmetro no corpo destinado ao código.
 
 ### Migrar o SQLite existente para o Neon
 
@@ -212,7 +232,7 @@ O Render continua usando somente a variável `DATABASE_URL` configurada no paine
 
 ## Integrações externas da versão consolidada
 
-A confirmação real de códigos exige `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` e `SMTP_FROM` para e-mail, ou `WHATSAPP_ACCESS_TOKEN` e `WHATSAPP_PHONE_NUMBER_ID` para WhatsApp Cloud API. Sem elas o sistema informa indisponibilidade e nunca simula validação. Configure também `STAFF_NAME`, `PICKUP_CEP` e `PRIVACY_CONTACT` antes de liberar o novo contrato; os valores padrão correspondem aos dados já informados do estabelecimento.
+A confirmação real de códigos exige `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` e `GMAIL_SENDER` para e-mail pela Gmail API, ou as variáveis documentadas de WhatsApp Cloud API. Sem elas o sistema informa indisponibilidade e nunca simula validação. Configure também `STAFF_NAME`, `PICKUP_CEP` e `PRIVACY_CONTACT` antes de liberar o novo contrato; os valores padrão correspondem aos dados já informados do estabelecimento.
 
 O lembrete do terceiro dia deve executar `python scripts/send_reminders.py` uma vez por dia em um Render Cron Job ou serviço equivalente independente do processo web. O job é idempotente por pacote, revalida o status antes do envio e registra aceite ou falha do provedor. Render Cron e provedores de e-mail/WhatsApp podem ter custos conforme o plano; nenhum serviço é contratado automaticamente.
 

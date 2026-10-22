@@ -1,39 +1,65 @@
+import base64
 import json
+from email import message_from_bytes
 from io import BytesIO
 from urllib.error import HTTPError
 
 import notifications
 
 
-class FakeSMTP:
-    instances = []
-    def __init__(self, host, port, timeout):
-        self.host, self.port, self.timeout, self.events = host, port, timeout, []
-        self.__class__.instances.append(self)
+class Response:
+    def __init__(self, body, status=200):
+        self.body, self.status = body, status
     def __enter__(self): return self
     def __exit__(self, *args): return None
-    def ehlo(self): self.events.append("ehlo")
-    def starttls(self): self.events.append("starttls")
-    def login(self, user, password): self.events.append(("login", user, password))
-    def send_message(self, message): self.message = message; return {}
+    def read(self): return json.dumps(self.body).encode()
 
 
-def test_email_starttls_is_supported(monkeypatch):
-    for name, value in {"SMTP_HOST":"smtp.test", "SMTP_PORT":"587", "SMTP_SECURITY":"starttls", "SMTP_USER":"user", "SMTP_PASSWORD":"secret", "SMTP_FROM":"no-reply@test.invalid"}.items():
-        monkeypatch.setenv(name, value)
-    FakeSMTP.instances.clear(); monkeypatch.setattr(notifications.smtplib, "SMTP", FakeSMTP)
-    ok, detail = notifications.send_code("email", "cliente@test.invalid", "123456")
-    assert ok and "aceito" in detail
-    instance = FakeSMTP.instances[-1]
-    assert instance.port == 587 and "starttls" in instance.events
-    assert "123456" in instance.message.get_content()
+def gmail_environment(monkeypatch):
+    monkeypatch.setenv("GMAIL_CLIENT_ID", "client-id")
+    monkeypatch.setenv("GMAIL_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("GMAIL_REFRESH_TOKEN", "refresh-token")
+    monkeypatch.setenv("GMAIL_SENDER", "vilmar920@gmail.com")
 
 
-def test_email_missing_configuration_does_not_simulate_success(monkeypatch):
-    for name in ("SMTP_HOST", "SMTP_FROM", "SMTP_USER", "SMTP_PASSWORD"):
+def test_gmail_refreshes_token_and_sends_encoded_message(monkeypatch):
+    gmail_environment(monkeypatch)
+    requests = []
+    def fake_open(request, timeout):
+        requests.append(request)
+        if request.full_url.endswith("/token"):
+            assert b"grant_type=refresh_token" in request.data
+            assert b"refresh-token" in request.data
+            return Response({"access_token": "short-lived-access-token", "expires_in": 3600})
+        assert request.full_url.endswith("/gmail/v1/users/me/messages/send")
+        assert request.headers["Authorization"] == "Bearer short-lived-access-token"
+        payload = json.loads(request.data)
+        raw = base64.urlsafe_b64decode(payload["raw"] + "==")
+        email = message_from_bytes(raw)
+        assert email["From"] == "vilmar920@gmail.com"
+        assert email["To"] == "cliente@example.com"
+        assert "123456" in email.get_payload(decode=True).decode("utf-8")
+        return Response({"id": "gmail-message-1", "labelIds": ["SENT"]})
+    monkeypatch.setattr(notifications, "urlopen", fake_open)
+    ok, detail = notifications.send_code("email", "cliente@example.com", "123456")
+    assert ok and "gmail-message-1" in detail
+    assert len(requests) == 2
+
+
+def test_gmail_missing_configuration_does_not_simulate_success(monkeypatch):
+    for name in ("GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET", "GMAIL_REFRESH_TOKEN"):
         monkeypatch.delenv(name, raising=False)
-    ok, detail = notifications.send_code("email", "cliente@test.invalid", "123456")
+    ok, detail = notifications.send_code("email", "cliente@example.com", "123456")
     assert not ok and "não configurado" in detail
+
+
+def test_gmail_refresh_error_is_clear_and_does_not_send(monkeypatch):
+    gmail_environment(monkeypatch)
+    error = HTTPError("https://oauth2.googleapis.com/token", 400, "bad", {},
+                      BytesIO(b'{"error":"invalid_grant","error_description":"Token has been expired or revoked"}'))
+    monkeypatch.setattr(notifications, "urlopen", lambda *args, **kwargs: (_ for _ in ()).throw(error))
+    ok, detail = notifications.send_email("cliente@example.com", "Assunto", "Mensagem")
+    assert not ok and "OAuth do Google" in detail and "invalid_grant" in detail
 
 
 def test_whatsapp_uses_approved_template_and_brazil_e164(monkeypatch):
@@ -42,13 +68,8 @@ def test_whatsapp_uses_approved_template_and_brazil_e164(monkeypatch):
     monkeypatch.setenv("WHATSAPP_TEMPLATE_NAME", "codigo_recuperacao")
     monkeypatch.setenv("WHATSAPP_GRAPH_VERSION", "v99.0")
     captured = {}
-    class Response:
-        status = 200
-        def __enter__(self): return self
-        def __exit__(self, *args): return None
-        def read(self): return b'{"messages":[{"id":"wamid.1"}]}'
     def fake_open(request, timeout):
-        captured.update(json.loads(request.data)); return Response()
+        captured.update(json.loads(request.data)); return Response({"messages": [{"id": "wamid.1"}]})
     monkeypatch.setattr(notifications, "urlopen", fake_open)
     ok, detail = notifications.send_code("whatsapp", "(16) 98800-4966", "654321")
     assert ok and "wamid.1" in detail
