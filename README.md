@@ -1,14 +1,38 @@
-# Ponto de Coleta Adelinha — versão de teste
+# ME GUARDE — Ponto de Coleta Adelinha
 
 Sistema web responsivo do serviço **ME GUARDE — COMPROU? DEIXA COM A GENTE.**, operado pelo Ponto de Coleta Adelinha. Inclui cadastro público, gestão interna de pacotes, aviso manual por WhatsApp, cálculo de prazo e retirada com comprovante. Em produção, os dados ficam no PostgreSQL do Neon; SQLite é usado somente nos testes e na execução local.
 
-## Link da prévia
+## Repositório e instalação
 
-**[Abrir a versão de teste do Ponto de Coleta Adelinha](https://ponto-coleta-adelinha-teste.onrender.com)**
+O nome do projeto e do repositório é `me-guarde-ponto-de-coleta-adelinha`.
 
-O endereço acima corresponde ao serviço `ponto-coleta-adelinha-teste` configurado em `render.yaml`. A versão nova aparecerá nesse mesmo link depois que esta branch for enviada ao GitHub, mesclada na branch acompanhada pelo Render e o deploy terminar com sucesso. O link não muda a cada atualização.
+Repositório: https://github.com/VilmarOliveira/me-guarde-ponto-de-coleta-adelinha
 
-Para confirmar que a atualização entrou no ar, abra também o [health check da prévia](https://ponto-coleta-adelinha-teste.onrender.com/health). Ele deve mostrar `{"status":"ok"}`. Se o Render estiver configurado para exigir autenticação de acesso à prévia, entre primeiro com a conta autorizada no painel do Render.
+Para baixar uma nova cópia no servidor Oracle ou em outro computador:
+
+```bash
+git clone https://github.com/VilmarOliveira/me-guarde-ponto-de-coleta-adelinha.git
+cd me-guarde-ponto-de-coleta-adelinha
+```
+
+Se você já tem uma cópia local, entre na pasta existente do projeto e atualize somente o endereço remoto:
+
+```bash
+git remote set-url origin https://github.com/VilmarOliveira/me-guarde-ponto-de-coleta-adelinha.git
+git remote -v
+```
+
+A pasta de uma cópia antiga não é renomeada automaticamente. Esses comandos não alteram o banco de dados nem as variáveis de ambiente.
+
+## Site atual e configuração do Render
+
+Site atualmente utilizado: https://teste01-ponto-de-coleta-adelinha-1.onrender.com
+
+Health check: https://teste01-ponto-de-coleta-adelinha-1.onrender.com/health — deve responder `{"status":"ok"}`.
+
+O arquivo `render.yaml` usa o nome de serviço `me-guarde-ponto-de-coleta-adelinha` para a configuração do projeto. Renomear o repositório ou editar esse arquivo não transfere o endereço existente do Render para a Oracle, nem garante uma nova URL pública. Confira o serviço vinculado e qualquer alteração proposta pelo Blueprint no painel do Render antes de aplicar.
+
+Durante a migração para a Oracle, mantenha o site atual disponível até validar a nova instalação. Preserve a conexão do Neon e as credenciais da Gmail API; não publique esses valores no repositório.
 
 > **Atenção:** esta versão usa dados e credenciais de demonstração. O contrato deve ser revisado por profissional jurídico e a segurança operacional validada antes de atender clientes reais.
 
@@ -36,7 +60,7 @@ Esse erro não vem do sistema Adelinha: significa que a rede bloqueou o acesso d
 
 1. Execute o processo em sua internet residencial ou compartilhe a internet do celular.
 2. Se estiver numa empresa/escola, peça ao suporte o endereço do **espelho PyPI** e execute `PIP_INDEX_URL=https://ENDERECO-DO-ESPELHO/simple ./scripts/setup.sh`.
-3. Como alternativa, instale o Docker Desktop e execute `docker build -t adelinha-teste .` e depois `docker run --rm -p 5000:5000 -v adelinha-dados:/data adelinha-teste`. O Docker também precisa de acesso à internet na primeira construção.
+3. Como alternativa, instale o Docker Desktop e execute `docker build -t me-guarde-ponto-de-coleta-adelinha .` e depois `docker run --rm -p 5000:5000 -v adelinha-dados:/data me-guarde-ponto-de-coleta-adelinha`. O Docker também precisa de acesso à internet na primeira construção.
 
 Não desative o antivírus, o certificado TLS ou a verificação HTTPS para contornar o erro.
 
@@ -142,7 +166,7 @@ Crie uma conta gratuita no GitHub e um repositório **privado**, sem adicionar R
 git status
 git add .
 git commit -m "Descreva aqui a alteração"
-git remote add origin https://github.com/SEU-USUARIO/SEU-REPOSITORIO.git
+git remote add origin https://github.com/VilmarOliveira/me-guarde-ponto-de-coleta-adelinha.git
 git push -u origin work
 ```
 
