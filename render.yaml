@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: me-guarde-ponto-de-coleta-adelinha
+    name: sistema-ponto-de-coleta-adelinha
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
