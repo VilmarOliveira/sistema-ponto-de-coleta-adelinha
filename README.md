@@ -1,24 +1,24 @@
-# ME GUARDE — Ponto de Coleta Adelinha
+# Sistema Ponto de Coleta Adelinha
 
 Sistema web responsivo do serviço **ME GUARDE — COMPROU? DEIXA COM A GENTE.**, operado pelo Ponto de Coleta Adelinha. Inclui cadastro público, gestão interna de pacotes, aviso manual por WhatsApp, cálculo de prazo e retirada com comprovante. Em produção, os dados ficam no PostgreSQL do Neon; SQLite é usado somente nos testes e na execução local.
 
 ## Repositório e instalação
 
-O nome do projeto e do repositório é `me-guarde-ponto-de-coleta-adelinha`.
+O nome do projeto e do repositório é `sistema-ponto-de-coleta-adelinha`.
 
-Repositório: https://github.com/VilmarOliveira/me-guarde-ponto-de-coleta-adelinha
+Repositório: https://github.com/VilmarOliveira/sistema-ponto-de-coleta-adelinha
 
 Para baixar uma nova cópia no servidor Oracle ou em outro computador:
 
 ```bash
-git clone https://github.com/VilmarOliveira/me-guarde-ponto-de-coleta-adelinha.git
-cd me-guarde-ponto-de-coleta-adelinha
+git clone https://github.com/VilmarOliveira/sistema-ponto-de-coleta-adelinha.git
+cd sistema-ponto-de-coleta-adelinha
 ```
 
 Se você já tem uma cópia local, entre na pasta existente do projeto e atualize somente o endereço remoto:
 
 ```bash
-git remote set-url origin https://github.com/VilmarOliveira/me-guarde-ponto-de-coleta-adelinha.git
+git remote set-url origin https://github.com/VilmarOliveira/sistema-ponto-de-coleta-adelinha.git
 git remote -v
 ```
 
@@ -30,7 +30,7 @@ Site atualmente utilizado: https://teste01-ponto-de-coleta-adelinha-1.onrender.c
 
 Health check: https://teste01-ponto-de-coleta-adelinha-1.onrender.com/health — deve responder `{"status":"ok"}`.
 
-O arquivo `render.yaml` usa o nome de serviço `me-guarde-ponto-de-coleta-adelinha` para a configuração do projeto. Renomear o repositório ou editar esse arquivo não transfere o endereço existente do Render para a Oracle, nem garante uma nova URL pública. Confira o serviço vinculado e qualquer alteração proposta pelo Blueprint no painel do Render antes de aplicar.
+O arquivo `render.yaml` usa o nome de serviço `sistema-ponto-de-coleta-adelinha` para a configuração do projeto. Renomear o repositório ou editar esse arquivo não transfere o endereço existente do Render para a Oracle, nem garante uma nova URL pública. Confira o serviço vinculado e qualquer alteração proposta pelo Blueprint no painel do Render antes de aplicar.
 
 Durante a migração para a Oracle, mantenha o site atual disponível até validar a nova instalação. Preserve a conexão do Neon e as credenciais da Gmail API; não publique esses valores no repositório.
 
@@ -60,7 +60,7 @@ Esse erro não vem do sistema Adelinha: significa que a rede bloqueou o acesso d
 
 1. Execute o processo em sua internet residencial ou compartilhe a internet do celular.
 2. Se estiver numa empresa/escola, peça ao suporte o endereço do **espelho PyPI** e execute `PIP_INDEX_URL=https://ENDERECO-DO-ESPELHO/simple ./scripts/setup.sh`.
-3. Como alternativa, instale o Docker Desktop e execute `docker build -t me-guarde-ponto-de-coleta-adelinha .` e depois `docker run --rm -p 5000:5000 -v adelinha-dados:/data me-guarde-ponto-de-coleta-adelinha`. O Docker também precisa de acesso à internet na primeira construção.
+3. Como alternativa, instale o Docker Desktop e execute `docker build -t sistema-ponto-de-coleta-adelinha .` e depois `docker run --rm -p 5000:5000 -v adelinha-dados:/data sistema-ponto-de-coleta-adelinha`. O Docker também precisa de acesso à internet na primeira construção.
 
 Não desative o antivírus, o certificado TLS ou a verificação HTTPS para contornar o erro.
 
@@ -166,7 +166,7 @@ Crie uma conta gratuita no GitHub e um repositório **privado**, sem adicionar R
 git status
 git add .
 git commit -m "Descreva aqui a alteração"
-git remote add origin https://github.com/VilmarOliveira/me-guarde-ponto-de-coleta-adelinha.git
+git remote add origin https://github.com/VilmarOliveira/sistema-ponto-de-coleta-adelinha.git
 git push -u origin work
 ```
 
