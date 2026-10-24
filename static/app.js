@@ -466,3 +466,27 @@ document.querySelectorAll('[data-metric]').forEach((link) => {
     fetch('/metricas/evento', {method: 'POST', body: data, credentials: 'same-origin', keepalive: true}).catch(() => {});
   });
 });
+
+// Keep the floating support image clear of form fields and action buttons.
+const supportFloat = document.querySelector('.support-float');
+if (supportFloat) {
+  let supportFrame = 0;
+  const updateSupportPosition = () => {
+    supportFrame = 0;
+    const support = supportFloat.getBoundingClientRect();
+    const controls = document.querySelectorAll('input:not([type="hidden"]), textarea, select, button, a.button, summary');
+    const overlaps = Array.from(controls).some((control) => {
+      const box = control.getBoundingClientRect();
+      return box.width > 0 && box.height > 0 && box.left < support.right && box.right > support.left && box.top < support.bottom && box.bottom > support.top;
+    });
+    supportFloat.toggleAttribute('data-control-overlap', overlaps);
+  };
+  const scheduleSupportPosition = () => {
+    if (!supportFrame) supportFrame = requestAnimationFrame(updateSupportPosition);
+  };
+  window.addEventListener('scroll', scheduleSupportPosition, {passive: true});
+  window.addEventListener('resize', scheduleSupportPosition);
+  document.addEventListener('toggle', scheduleSupportPosition, true);
+  new ResizeObserver(scheduleSupportPosition).observe(document.body);
+  scheduleSupportPosition();
+}
