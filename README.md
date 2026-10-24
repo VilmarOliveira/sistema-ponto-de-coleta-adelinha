@@ -259,3 +259,8 @@ Para SEO, cadastre o domínio real como domínio canônico na implantação, ver
 4. Reinicie o processo Gunicorn pelo gerenciador usado na máquina (por exemplo, `sudo systemctl restart me-guarde`) e confira `/health`.
 
 A inicialização executa apenas criações e alterações não destrutivas: preserva clientes, pacotes, contratos, pagamentos e comprovantes. Os códigos públicos da equipe e as métricas ficam no Neon; não é necessário disco persistente na Oracle. A medição registra somente identificador aleatório, página, origem técnica quando disponível, tipo de dispositivo e horário. Ela começa no primeiro acesso após esta versão, é estimativa e não coleta formulários, documentos, assinaturas, senhas ou códigos.
+
+
+### Banner original, WhatsApp e abas de usuários
+
+Consulte [o procedimento desta atualização na Oracle](docs/atualizacao-oracle.md) para instalar os arquivos originais, conferir o banner principal e validar as abas Clientes e Membros da equipe.

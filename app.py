@@ -356,7 +356,7 @@ def create_app(test_config=None):
                 mimetype=setting["main_banner_mime"],
                 headers={"Cache-Control": "public,max-age=3600"},
             )
-        return redirect(url_for("static", filename="me-guarde-banner.svg", v="default-1"))
+        return redirect(url_for("static", filename="me-guarde-banner.webp", v="original-2026-10"))
 
     @app.post("/metricas/evento")
     def analytics_event():
@@ -424,11 +424,16 @@ def create_app(test_config=None):
         response.headers["Cache-Control"] = "no-store, max-age=0"
         return response
 
+    @app.route("/painel/configuracoes/banner-principal", methods=["GET", "POST"], endpoint="main_banner_settings")
     @app.route("/painel/configuracoes/identidade", methods=["GET", "POST"])
     @admin_required
     def visual_identity():
+        main_banner_page = request.endpoint == "main_banner_settings"
+        template = "main_banner_settings.html" if main_banner_page else "visual_identity.html"
         if request.method == "POST":
-            action = request.form.get("action", "header")
+            action = request.form.get("action", "main_banner" if main_banner_page else "header")
+            if main_banner_page and (action not in {"main_banner", "restore_main_banner"} or request.form.get("restore")):
+                abort(400)
             if request.form.get("restore") == "yes":
                 db().execute("UPDATE settings SET header_image=NULL,header_image_mime=NULL WHERE id=1")
                 audit("restaurar_identidade_visual", "configuracao", 1)
@@ -441,7 +446,7 @@ def create_app(test_config=None):
                 mime = validated_image_type(data, 2 * 1024 * 1024)
                 if not data or len(data) > 2 * 1024 * 1024 or not mime:
                     flash("Envie um banner PNG, JPG ou WebP de até 2 MB.", "error")
-                    return render_template("visual_identity.html", main_banner_version=now().timestamp()), 400
+                    return render_template(template, main_banner_version=now().timestamp()), 400
                 db().execute(
                     "UPDATE settings SET main_banner_image=?,main_banner_mime=?,main_banner_updated_at=? WHERE id=1",
                     (data, mime, now().isoformat()),
@@ -458,9 +463,9 @@ def create_app(test_config=None):
                 audit("alterar_identidade_visual", "configuracao", 1)
             db().commit()
             flash("Identidade visual alterada com sucesso!", "success")
-            return redirect(url_for("visual_identity"))
+            return redirect(url_for("main_banner_settings" if main_banner_page else "visual_identity"))
         setting = db().execute("SELECT main_banner_updated_at FROM settings WHERE id=1").fetchone()
-        return render_template("visual_identity.html", main_banner_version=setting["main_banner_updated_at"] if setting else "default")
+        return render_template(template, main_banner_version=setting["main_banner_updated_at"] if setting else "default")
 
     @app.get("/banners/<int:banner_id>/imagem")
     def banner_image(banner_id):
@@ -586,12 +591,42 @@ def create_app(test_config=None):
                     cur=db().execute("INSERT INTO staff_users(public_id,name,email,password_hash,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,created_at,session_version) VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?,1) RETURNING id",(public_id,name,email,generate_password_hash(password),role,primary,int(role=="administrador"),int(role=="administrador"),*permissions,now().isoformat()))
                     uid=cur.fetchone()["id"]; audit("criar_usuario_equipe","usuario_equipe",uid,f"perfil {role}"); db().commit(); flash("Usuário criado.","success")
                 except DatabaseIntegrityError: db().rollback(); flash("Este e-mail já possui acesso.","error")
-            return redirect(url_for("staff_users"))
-        users=db().execute("SELECT id,public_id,name,email,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,created_at FROM staff_users WHERE deleted_at IS NULL ORDER BY active DESC,name").fetchall()
-        client_query=request.args.get("q","").strip(); like=f"%{client_query}%"
-        clients=db().execute("SELECT id,public_id,name,email,phone,active FROM clients WHERE (?='' OR LOWER(name) LIKE LOWER(?) OR LOWER(public_id) LIKE LOWER(?) OR phone LIKE ?) ORDER BY active DESC,name LIMIT 50",(client_query,like,like,f"%{digits(client_query)}%" if digits(client_query) else like)).fetchall()
-        legacy=db().execute("SELECT legacy_staff_active FROM settings WHERE id=1").fetchone()
-        return render_template("staff_users.html",users=users,clients=clients,q=client_query,legacy_active=legacy["legacy_staff_active"])
+            return users_redirect("equipe")
+        tab = request.args.get("tab", "clientes")
+        if tab not in {"clientes", "equipe"}:
+            tab = "clientes"
+        client_query = request.args.get("q_clients", request.args.get("q", "")).strip()
+        team_query = request.args.get("q_team", "").strip()
+        query = client_query if tab == "clientes" else team_query
+        like = f"%{query}%"
+        page = max(1, request.args.get("page", 1, type=int))
+        users, clients = [], []
+        if tab == "clientes":
+            where = "(?='' OR LOWER(name) LIKE LOWER(?) OR LOWER(public_id) LIKE LOWER(?) OR LOWER(email) LIKE LOWER(?) OR phone LIKE ?)"
+            params = (query, like, like, like, f"%{digits(query)}%" if digits(query) else like)
+            total = db().execute(f"SELECT COUNT(*) total FROM clients WHERE {where}", params).fetchone()["total"]
+            pages = max(1, math.ceil(total / 50))
+            page = min(page, pages)
+            clients = db().execute(f"SELECT id,public_id,name,email,phone,active FROM clients WHERE {where} ORDER BY active DESC,name,id LIMIT 50 OFFSET ?", (*params, (page - 1) * 50)).fetchall()
+        else:
+            where = "deleted_at IS NULL AND (?='' OR LOWER(name) LIKE LOWER(?) OR LOWER(public_id) LIKE LOWER(?) OR LOWER(email) LIKE LOWER(?) OR LOWER(role) LIKE LOWER(?))"
+            params = (query, like, like, like, like)
+            total = db().execute(f"SELECT COUNT(*) total FROM staff_users WHERE {where}", params).fetchone()["total"]
+            pages = max(1, math.ceil(total / 50))
+            page = min(page, pages)
+            users = db().execute(f"SELECT id,public_id,name,email,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,created_at FROM staff_users WHERE {where} ORDER BY active DESC,name,id LIMIT 50 OFFSET ?", (*params, (page - 1) * 50)).fetchall()
+        legacy = db().execute("SELECT legacy_staff_active FROM settings WHERE id=1").fetchone()
+        filters = {"tab": tab, "q_clients": client_query, "q_team": team_query, "page": page}
+        return render_template("staff_users.html", users=users, clients=clients, tab=tab,
+                               q=client_query, q_clients=client_query, q_team=team_query,
+                               user_filters=filters, page=page, pages=pages, total=total,
+                               legacy_active=legacy["legacy_staff_active"])
+
+    def users_redirect(tab):
+        return redirect(url_for("staff_users", tab=tab,
+                                q_clients=request.values.get("q_clients", request.values.get("q", "")),
+                                q_team=request.values.get("q_team", ""),
+                                page=request.values.get("page", 1, type=int)))
 
     @app.post("/painel/configuracoes/clientes/<int:client_id>/alternar")
     @primary_required
@@ -601,7 +636,7 @@ def create_app(test_config=None):
         db().execute("UPDATE clients SET active=?,session_version=session_version+1 WHERE id=?",(0 if client["active"] else 1,client_id))
         audit("bloquear_cliente" if client["active"] else "ativar_cliente","cliente",client_id,"sessões encerradas")
         db().commit(); flash("Acesso do cliente atualizado e sessões encerradas.","success")
-        return redirect(url_for("staff_users",q=request.args.get("q","")))
+        return users_redirect("clientes")
 
     @app.post("/painel/configuracoes/clientes/<int:client_id>/encerrar-sessoes")
     @primary_required
@@ -609,7 +644,7 @@ def create_app(test_config=None):
         updated=db().execute("UPDATE clients SET session_version=session_version+1 WHERE id=?",(client_id,))
         if updated.rowcount != 1: abort(404)
         audit("encerrar_sessoes","cliente",client_id); db().commit(); flash("Sessões do cliente encerradas.","success")
-        return redirect(url_for("staff_users"))
+        return users_redirect("clientes")
 
     @app.post("/painel/configuracoes/clientes/<int:client_id>/recuperar-senha")
     @primary_required
@@ -618,18 +653,18 @@ def create_app(test_config=None):
         if not client: abort(404)
         if not client["active"] or not client["email"]:
             flash("Ative a conta e cadastre um e-mail antes de iniciar a recuperação.","error")
-            return redirect(url_for("staff_users"))
+            return users_redirect("clientes")
         cutoff=(now()-timedelta(minutes=15)).isoformat()
         recent=db().execute("SELECT COUNT(id) total,MAX(created_at) latest FROM verification_codes WHERE client_id=? AND purpose='password_recovery' AND created_at>=?",(client_id,cutoff)).fetchone()
         if recent["total"]>=3 or (recent["latest"] and now()-datetime.fromisoformat(recent["latest"])<timedelta(seconds=60)):
-            flash("Aguarde antes de solicitar um novo código.","error"); return redirect(url_for("staff_users"))
+            flash("Aguarde antes de solicitar um novo código.","error"); return users_redirect("clientes")
         code=f"{secrets.randbelow(1000000):06d}"; created=now().isoformat()
         sent,detail=send_code("email",client["email"],code)
         db().execute("INSERT INTO verification_codes(client_id,purpose,channel,destination,code_hash,expires_at,attempts,sends,provider_status,created_at,used_at) VALUES(?,?,?,?,?,?,0,1,?,?,?)",
             (client_id,"password_recovery","email",client["email"],hashlib.sha256(code.encode()).hexdigest(),(now()+timedelta(minutes=10)).isoformat(),detail,created,None if sent else created))
         audit("iniciar_recuperacao_senha","cliente",client_id,"envio por e-mail aceito" if sent else "falha do provedor")
         db().commit(); flash("O Gmail aceitou o envio do código." if sent else f"Não foi possível enviar o código. {detail}.","success" if sent else "error")
-        return redirect(url_for("staff_users"))
+        return users_redirect("clientes")
 
     @app.post("/painel/configuracoes/usuarios/<int:user_id>/editar")
     @primary_required
@@ -646,7 +681,7 @@ def create_app(test_config=None):
                 db().execute("UPDATE staff_users SET name=?,email=?,role=?,can_settings=?,can_users=?,can_clients=?,can_packages=?,can_pickups=? WHERE id=?",(name,email,role,int(role=="administrador"),int(role=="administrador"),*permissions,user_id))
                 audit("editar_usuario_equipe","usuario_equipe",user_id,f"perfil {role}"); db().commit(); flash("Usuário atualizado.","success")
             except DatabaseIntegrityError: db().rollback(); flash("Este e-mail já pertence a outro usuário.","error")
-        return redirect(url_for("staff_users"))
+        return users_redirect("equipe")
 
     @app.post("/painel/configuracoes/usuarios/<int:user_id>/alternar")
     @primary_required
@@ -655,8 +690,8 @@ def create_app(test_config=None):
         if not user: abort(404)
         if user["active"]:
             active_admins=db().execute("SELECT COUNT(id) total FROM staff_users WHERE active=1 AND deleted_at IS NULL AND role='administrador'").fetchone()["total"]
-            if user["role"]=="administrador" and active_admins<=1: flash("Não é possível desativar o último administrador.","error"); return redirect(url_for("staff_users"))
-        db().execute("UPDATE staff_users SET active=?,session_version=session_version+1 WHERE id=?",(0 if user["active"] else 1,user_id)); audit("alterar_acesso_equipe","usuario_equipe",user_id); db().commit(); flash("Acesso atualizado.","success"); return redirect(url_for("staff_users"))
+            if user["role"]=="administrador" and active_admins<=1: flash("Não é possível desativar o último administrador.","error"); return users_redirect("equipe")
+        db().execute("UPDATE staff_users SET active=?,session_version=session_version+1 WHERE id=?",(0 if user["active"] else 1,user_id)); audit("alterar_acesso_equipe","usuario_equipe",user_id); db().commit(); flash("Acesso atualizado.","success"); return users_redirect("equipe")
 
     @app.post("/painel/configuracoes/usuarios/<int:user_id>/excluir")
     @primary_required
@@ -668,7 +703,7 @@ def create_app(test_config=None):
             flash("Não é possível excluir o último administrador.","error")
         else:
             db().execute("UPDATE staff_users SET active=0,deleted_at=?,session_version=session_version+1 WHERE id=?",(now().isoformat(),user_id)); audit("excluir_usuario_equipe","usuario_equipe",user_id); db().commit(); flash("Usuário excluído e sessões encerradas. O histórico foi preservado.","success")
-        return redirect(url_for("staff_users"))
+        return users_redirect("equipe")
 
     @app.post("/painel/configuracoes/usuarios/<int:user_id>/recuperar")
     @primary_required
@@ -677,11 +712,11 @@ def create_app(test_config=None):
         if not account: abort(404)
         cutoff=(now()-timedelta(minutes=15)).isoformat(); recent=db().execute("SELECT COUNT(id) total,MAX(created_at) latest FROM staff_recovery_codes WHERE staff_user_id=? AND created_at>=?",(user_id,cutoff)).fetchone()
         if recent["total"]>=3 or (recent["latest"] and now()-datetime.fromisoformat(recent["latest"])<timedelta(seconds=60)):
-            flash("Aguarde antes de solicitar um novo código.","error"); return redirect(url_for("staff_users"))
+            flash("Aguarde antes de solicitar um novo código.","error"); return users_redirect("equipe")
         code=f"{secrets.randbelow(1000000):06d}"; created=now().isoformat(); sent,detail=send_code("email",account["email"],code)
         db().execute("INSERT INTO staff_recovery_codes(staff_user_id,code_hash,expires_at,provider_status,created_at,used_at) VALUES(?,?,?,?,?,?)",(account["id"],hashlib.sha256(code.encode()).hexdigest(),(now()+timedelta(minutes=10)).isoformat(),detail,created,None if sent else created)); db().commit()
         flash("O Gmail aceitou o envio do código." if sent else f"Não foi possível enviar o código. {detail}.","success" if sent else "error")
-        return redirect(url_for("staff_users"))
+        return users_redirect("equipe")
 
     @app.post("/painel/configuracoes/usuarios/<int:user_id>/encerrar-sessoes")
     @primary_required
@@ -690,7 +725,7 @@ def create_app(test_config=None):
         if updated.rowcount != 1: abort(404)
         audit("encerrar_sessoes","usuario_equipe",user_id); db().commit()
         flash("Sessões do membro da equipe encerradas.","success")
-        return redirect(url_for("staff_users"))
+        return users_redirect("equipe")
 
     @app.post("/painel/configuracoes/usuarios/desativar-legado")
     @primary_required
@@ -698,7 +733,7 @@ def create_app(test_config=None):
         principals=db().execute("SELECT COUNT(id) total FROM staff_users WHERE active=1 AND deleted_at IS NULL AND role='administrador' AND last_login_at IS NOT NULL").fetchone()["total"]
         if not principals: flash("Crie a nova conta de administrador e confirme um login nela antes de desativar o acesso anterior.","error")
         else: db().execute("UPDATE settings SET legacy_staff_active=0 WHERE id=1"); audit("excluir_acesso_legado","configuracao",1); db().commit(); flash("Acesso administrativo anterior excluído e bloqueado.","success")
-        return redirect(url_for("staff_users"))
+        return users_redirect("equipe")
 
     @app.get("/blog")
     def blog():

@@ -24,9 +24,51 @@ select,textarea{display:block;width:100%;margin-top:7px;border:1px solid #d5cec5
 @media(max-width:600px){.tutorial-grid,.metric-grid,.alert-cards{grid-template-columns:1fr}.service-mark{margin-inline:auto}.copy-delivery{width:100%}.metric-filters>*{width:100%}}
 
 /* Banner principal horizontal: separado dos banners rotativos. */
-.main-service-banner{width:100%;padding:clamp(8px,1.4vw,20px) max(10px,2vw);background:#fff;overflow:hidden}
+.main-service-banner{width:100%;padding:0;background:#fff}
 .main-service-banner img{display:block;width:100%;height:auto;max-height:none;object-fit:contain;object-position:center}
 .banner-carousel-section{max-width:800px}
 .main-banner-preview{display:block;width:100%;height:auto;max-height:320px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:var(--radius);margin:16px 0}
 .settings-card b{display:flex;align-items:center;gap:9px}.settings-card .ui-icon{color:var(--purple)}
-@media(max-width:600px){.main-service-banner{padding:6px 4px}.main-service-banner img{width:100%;max-width:100%}}
+@media(max-width:600px){.main-service-banner{padding:0}.main-service-banner img{width:100%;max-width:100%}}
+
+/* Listagens independentes, com navegação funcional mesmo sem JavaScript. */
+.user-tabs{display:flex;gap:10px;margin:24px 0;flex-wrap:wrap}
+.user-tabs a{flex:1;text-align:center;white-space:normal}
+.users-management .search{align-items:end;margin:20px 0}
+.users-management .search-field{flex:1;min-width:0;margin:0}
+.users-management .search input[type=hidden]{display:none}
+.users-management .table-scroll{max-width:100%;overflow-x:auto}
+.users-management td{overflow-wrap:anywhere;vertical-align:top}
+.users-management td:last-child{min-width:230px}
+.users-management td form input:not([type=checkbox]):not([type=hidden]),.users-management td select{max-width:100%}
+.users-management td label{display:flex;align-items:center;gap:8px}
+.users-management input[type=checkbox]{display:inline-block;width:18px;height:18px;flex:none;margin:0}
+.team-create{margin:20px 0}
+.team-create summary{list-style:none;width:fit-content}
+.team-create summary::-webkit-details-marker{display:none}
+.team-create[open]>form{margin-top:16px;padding:18px;border:1px solid var(--line);border-radius:var(--radius)}
+.user-pagination{display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap;margin:20px 0}
+.support-float.has-original-icon{width:60px;height:60px;min-height:60px;padding:0;background:transparent;box-shadow:none;bottom:max(20px,env(safe-area-inset-bottom));right:max(16px,env(safe-area-inset-right))}
+.support-float.has-original-icon:hover,.support-float.has-original-icon:focus-visible{background:transparent}
+.support-float.has-original-icon img{width:100%;height:auto;display:block;clip-path:circle(50%);filter:drop-shadow(0 3px 5px #14244126)}
+.support-float:focus-visible,.user-tabs a:focus-visible,.team-create summary:focus-visible{outline:3px solid var(--navy);outline-offset:4px}
+body:has(.support-float){padding-bottom:96px}
+@media(max-width:600px){.user-tabs{gap:8px}.user-tabs a{padding:10px;min-width:0}.users-management{min-width:0}.team-create summary{width:100%}.support-float.has-original-icon{width:52px;height:52px;min-height:52px}.users-management .search{display:flex;flex-direction:column;align-items:stretch}}
+@media print{body:has(.support-float){padding-bottom:0}}
+
+@media(max-width:600px){body:has(input:focus,textarea:focus,select:focus) .support-float{visibility:hidden}}
+
+.user-edit{margin-bottom:12px}.user-edit summary{list-style:none}.user-edit summary::-webkit-details-marker{display:none}
+@media(max-width:750px){
+.users-management .table-scroll{overflow:visible}
+.users-management .table-scroll table{min-width:0}
+.users-management table,.users-management tbody,.users-management tr,.users-management td{display:block;width:100%}
+.users-management thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.users-management tbody tr{margin:16px 0;border:1px solid var(--line);border-radius:12px;padding:12px}
+.users-management td,.users-management td:last-child{min-width:0;padding:8px 0;border:0}
+.users-management td[data-label]::before{content:attr(data-label);display:block;color:var(--purple);font-size:12px;font-weight:800;margin-bottom:4px}
+.users-management .actions{display:flex;flex-wrap:wrap;gap:8px}.users-management .actions>*{flex:1 1 auto}
+.users-management .actions button{width:100%;padding:8px 10px}
+}
+
+.support-float[data-control-overlap]{visibility:hidden}
