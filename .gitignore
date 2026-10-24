@@ -1,0 +1,13 @@
+__pycache__/
+.pytest_cache/
+.venv/
+.venv-local/
+data/*.db
+*.pyc
+# Credenciais locais do Google/Gmail
+credentials*.json
+client_secret*.json
+token*.json
+gmail-render.env
+.env
+.env.*
