@@ -456,3 +456,13 @@ navToggle?.addEventListener('click', () => {
   navToggle.setAttribute('aria-expanded', String(open));
   mainNav?.classList.toggle('open', open);
 });
+
+document.querySelectorAll('[data-metric]').forEach((link) => {
+  link.addEventListener('click', () => {
+    const data = new FormData();
+    data.set('event', link.dataset.metric);
+    data.set('path', location.pathname);
+    data.set('csrf_token', document.querySelector('meta[name="csrf-token"]')?.content || '');
+    fetch('/metricas/evento', {method: 'POST', body: data, credentials: 'same-origin', keepalive: true}).catch(() => {});
+  });
+});

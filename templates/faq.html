@@ -1,4 +1,4 @@
-{% extends 'base.html' %}{% block title %}Dúvidas frequentes · Me Guarde{% endblock %}{% block content %}<section class="document faq"><span class="eyebrow">AJUDA</span><h1>Dúvidas frequentes</h1>
+{% extends 'base.html' %}{% from 'icons.html' import icon %}{% block title %}Dúvidas frequentes · Me Guarde{% endblock %}{% block content %}<section class="document faq"><span class="eyebrow">AJUDA</span><h1>Dúvidas frequentes</h1>
 {% set items=[
 ('Como faço meu cadastro?','Informe seus dados, leia e aceite o contrato, assine na tela e confirme o código recebido por e-mail. Ao concluir, você receberá um código de cliente, como CLTPCA-1.'),
 ('Qual endereço devo colocar nas minhas compras?','Use Rua Afonso Borges de Freitas, 795, Jardim Adelinha, Franca – SP, com o CEP informado no sistema. Inclua seu nome completo e código de cliente.'),
@@ -17,6 +17,6 @@
 ('Como será escolhido o frete?','Pelo menor valor disponível entre modalidades compatíveis; o comprovante da despesa será disponibilizado.'),
 ('Quais produtos não são aceitos?','Produtos ilícitos ou proibidos, armas, munições, explosivos, inflamáveis, substâncias perigosas, animais vivos ou itens que exijam refrigeração.'),
 ('Posso alterar meu telefone, e-mail ou endereço?','Sim. Acesse seus dados na Área do Cliente.'),
-('Esqueci minha senha. Como recupero?','Clique em “Esqueci minha senha”, escolha um contato cadastrado, confirme o código e crie nova senha.'),
+('Esqueci minha senha. Como recupero?','Clique em “Esqueci minha senha”, receba o código no e-mail cadastrado, confirme-o e crie nova senha.'),
 ('Onde encontro meu contrato e os comprovantes?','Na Área do Cliente, para consulta e download dos seus documentos.') ] %}
-{% for question,answer in items %}<details><summary>{{ question }}</summary><p>{{ answer }}</p></details>{% endfor %}</section>{% endblock %}
+{% set faq_icons=['person-add','location','home','ruler','box','bell','calendar','calendar','calendar','calendar','person','person','box','calendar','location','box','edit','key','download'] %}{% for question,answer in items %}<details><summary>{{ icon(faq_icons[loop.index0]) }} <span>{{ question }}</span></summary><p>{{ answer }}</p></details>{% endfor %}</section>{% endblock %}

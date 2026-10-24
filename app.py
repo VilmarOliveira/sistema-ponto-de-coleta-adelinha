@@ -145,7 +145,7 @@ def create_app(test_config=None):
 
     def current_staff():
         if session.get("staff_user_id"):
-            return db().execute("SELECT id,name,email,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,session_version,deleted_at FROM staff_users WHERE id=?", (session["staff_user_id"],)).fetchone()
+            return db().execute("SELECT id,public_id,name,email,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,session_version,deleted_at FROM staff_users WHERE id=?", (session["staff_user_id"],)).fetchone()
         return None
 
     def login_required(view):
@@ -208,6 +208,26 @@ def create_app(test_config=None):
             staff = current_staff()
             if not staff or not staff[required]:
                 abort(403)
+        if request.method == "GET" and request.endpoint in {"index", "faq", "blog", "blog_post", "terms"}:
+            visitor = session.setdefault("analytics_visitor", secrets.token_urlsafe(12))
+            agent = request.headers.get("User-Agent", "")[:300]
+            device = "celular" if re.search(r"Mobile|Android|iPhone", agent, re.I) else "computador"
+            referrer = request.referrer or ""
+            origin = "direto"
+            if referrer:
+                origin = re.sub(r"^https?://", "", referrer).split("/", 1)[0][:120] or "desconhecida"
+            db().execute("INSERT INTO analytics_events(visitor_id,event_type,path,origin,device,created_at) VALUES(?,?,?,?,?,?)",
+                (visitor, "pageview", request.path[:300], origin, device, now().isoformat()))
+            db().commit()
+
+    @app.after_request
+    def protect_session_pages(response):
+        # A página inicial muda conforme a sessão; dados autenticados nunca devem
+        # ser reaproveitados por caches compartilhados da Oracle ou do navegador.
+        if request.endpoint == "index" or session.get("staff") or session.get("client_id"):
+            response.headers["Cache-Control"] = "private, no-store, max-age=0"
+            response.headers["Vary"] = "Cookie"
+        return response
 
     @app.context_processor
     def shared_values():
@@ -223,7 +243,8 @@ def create_app(test_config=None):
         return {"csrf_token": session.get("csrf_token"), "address": PICKUP_ADDRESS,
                 "pickup_address": PICKUP_ADDRESS, "pix_receiver_name_full": PIX_RECEIVER_NAME,
                 "logged_name": staff["name"] if staff else (app.config["STAFF_NAME"] if session.get("staff") else client_name),
-                "theme_colors": theme_colors, "staff_account": staff, "staff_legacy": session.get("staff_legacy")}
+                "pickup_cep": PICKUP_CEP, "theme_colors": theme_colors, "staff_account": staff,
+                "staff_legacy": session.get("staff_legacy")}
 
     @app.template_filter("local_datetime")
     def local_datetime(value):
@@ -319,7 +340,52 @@ def create_app(test_config=None):
     def index():
         banners = db().execute("SELECT id,alt_text,position,updated_at FROM site_banners ORDER BY position,id LIMIT 3").fetchall()
         photos = db().execute("SELECT id,kind,alt_text,position,updated_at FROM site_photos ORDER BY position,id LIMIT 3").fetchall()
-        return render_template("index.html", banners=banners, photos=photos)
+        show_registration = not (session.get("client_id") or session.get("staff")) or bool(session.get("staff") and request.args.get("cadastro") == "1")
+        return render_template("index.html", banners=banners, photos=photos, show_registration=show_registration)
+
+    @app.post("/metricas/evento")
+    def analytics_event():
+        event = request.form.get("event", "")
+        if event not in {"cadastro", "area_cliente", "whatsapp"}:
+            abort(400)
+        visitor = session.setdefault("analytics_visitor", secrets.token_urlsafe(12))
+        db().execute("INSERT INTO analytics_events(visitor_id,event_type,path,origin,device,created_at) VALUES(?,?,?,?,?,?)",
+            (visitor, event, request.form.get("path", "")[:300], "interface", "não registrado", now().isoformat()))
+        db().commit()
+        return ("", 204)
+
+    @app.get("/painel/metricas")
+    @admin_required
+    def metrics_dashboard():
+        period = request.args.get("period", "7")
+        days = 1 if period == "today" else (30 if period == "30" else 7)
+        start = (now() - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        if period == "custom":
+            try:
+                start = datetime.fromisoformat(request.args.get("start", "")).replace(tzinfo=TZ)
+                end = datetime.fromisoformat(request.args.get("end", "")).replace(tzinfo=TZ) + timedelta(days=1)
+            except ValueError:
+                abort(400, "Período inválido")
+        else:
+            end = now() + timedelta(seconds=1)
+        start_iso, end_iso = start.isoformat(), end.isoformat()
+        visits = db().execute("SELECT COUNT(id) visits,COUNT(DISTINCT visitor_id) visitors,MIN(created_at) first_at FROM analytics_events WHERE event_type='pageview' AND created_at>=? AND created_at<?", (start_iso,end_iso)).fetchone()
+        pages = db().execute("SELECT path,COUNT(id) total FROM analytics_events WHERE event_type='pageview' AND created_at>=? AND created_at<? GROUP BY path ORDER BY total DESC LIMIT 10", (start_iso,end_iso)).fetchall()
+        devices = db().execute("SELECT device,COUNT(id) total FROM analytics_events WHERE event_type='pageview' AND created_at>=? AND created_at<? GROUP BY device", (start_iso,end_iso)).fetchall()
+        origins = db().execute("SELECT origin,COUNT(id) total FROM analytics_events WHERE event_type='pageview' AND created_at>=? AND created_at<? GROUP BY origin ORDER BY total DESC LIMIT 10", (start_iso,end_iso)).fetchall()
+        clicks = db().execute("SELECT event_type,COUNT(id) total FROM analytics_events WHERE event_type!='pageview' AND created_at>=? AND created_at<? GROUP BY event_type", (start_iso,end_iso)).fetchall()
+        operational = {
+            "new_clients": db().execute("SELECT COUNT(id) total FROM clients WHERE accepted_at>=? AND accepted_at<?",(start_iso,end_iso)).fetchone()["total"],
+            "received": db().execute("SELECT COUNT(id) total FROM packages WHERE created_at>=? AND created_at<?",(start_iso,end_iso)).fetchone()["total"],
+            "waiting": db().execute("SELECT COUNT(id) total FROM packages WHERE status='aguardando_retirada'").fetchone()["total"],
+            "picked": db().execute("SELECT COUNT(id) total FROM packages WHERE status='retirado' AND picked_at>=? AND picked_at<?",(start_iso,end_iso)).fetchone()["total"],
+            "late": 0,
+        }
+        notified=db().execute("SELECT notified_at FROM packages WHERE status='aguardando_retirada' AND notified_at IS NOT NULL").fetchall()
+        operational["late"]=sum(1 for item in notified if (now().date()-datetime.fromisoformat(item["notified_at"]).astimezone(TZ).date()).days+1 >= 5)
+        money = db().execute("SELECT COALESCE(SUM(final_total),0) received,COALESCE(SUM(discount_amount),0) discounts,COALESCE(SUM(surcharge_amount),0) surcharges,COALESCE(SUM(CASE WHEN payment_method='Pix' THEN final_total ELSE 0 END),0) pix,COALESCE(SUM(CASE WHEN payment_method='Dinheiro' THEN final_total ELSE 0 END),0) cash FROM pickups WHERE picked_at>=? AND picked_at<?",(start_iso,end_iso)).fetchone()
+        return render_template("metrics.html", visits=visits, pages=pages, devices=devices, origins=origins, clicks=clicks,
+            operational=operational, money=money, period=period, start=start.date(), end=(end-timedelta(days=1)).date())
 
     @app.get("/painel/configuracoes")
     @login_required
@@ -434,7 +500,7 @@ def create_app(test_config=None):
     @app.route("/painel/configuracoes/aparencia", methods=["GET", "POST"])
     @admin_required
     def appearance_settings():
-        defaults={"primary":"#ff4b16","secondary":"#4c2484","page":"#f6f4f8","surface":"#ffffff","text":"#142441","link":"#4c2484","border":"#e2dce9","header":"#ffffff","footer":"#142441","button":"#ff4b16","button_hover":"#d9360b"}
+        defaults={"primary":"#ff4b16","secondary":"#7f4fba","page":"#f6f4f8","surface":"#ffffff","text":"#142441","link":"#7142a8","border":"#e2dce9","header":"#ffffff","footer":"#142441","button":"#ff4b16","button_hover":"#d9360b"}
         if request.method == "POST":
             action=request.form.get("action")
             if action == "restore":
@@ -483,13 +549,55 @@ def create_app(test_config=None):
                 try:
                     primary = int(request.form.get("is_primary") == "yes")
                     permissions = tuple(int(role == "administrador" or request.form.get(key) == "yes") for key in ("can_clients", "can_packages", "can_pickups"))
-                    cur=db().execute("INSERT INTO staff_users(name,email,password_hash,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,created_at,session_version) VALUES(?,?,?,?,?,1,?,?,?,?,?,?,1) RETURNING id",(name,email,generate_password_hash(password),role,primary,int(role=="administrador"),int(role=="administrador"),*permissions,now().isoformat()))
+                    prefix = {"administrador":"ADMPCA", "gerente":"GERPCA", "atendente":"ATEPCA"}[role]
+                    public_id = next_public_code(db(), prefix)
+                    cur=db().execute("INSERT INTO staff_users(public_id,name,email,password_hash,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,created_at,session_version) VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?,1) RETURNING id",(public_id,name,email,generate_password_hash(password),role,primary,int(role=="administrador"),int(role=="administrador"),*permissions,now().isoformat()))
                     uid=cur.fetchone()["id"]; audit("criar_usuario_equipe","usuario_equipe",uid,f"perfil {role}"); db().commit(); flash("Usuário criado.","success")
                 except DatabaseIntegrityError: db().rollback(); flash("Este e-mail já possui acesso.","error")
             return redirect(url_for("staff_users"))
-        users=db().execute("SELECT id,name,email,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,created_at FROM staff_users WHERE deleted_at IS NULL ORDER BY active DESC,name").fetchall()
+        users=db().execute("SELECT id,public_id,name,email,role,is_primary,active,can_settings,can_users,can_clients,can_packages,can_pickups,created_at FROM staff_users WHERE deleted_at IS NULL ORDER BY active DESC,name").fetchall()
+        client_query=request.args.get("q","").strip(); like=f"%{client_query}%"
+        clients=db().execute("SELECT id,public_id,name,email,phone,active FROM clients WHERE (?='' OR LOWER(name) LIKE LOWER(?) OR LOWER(public_id) LIKE LOWER(?) OR phone LIKE ?) ORDER BY active DESC,name LIMIT 50",(client_query,like,like,f"%{digits(client_query)}%" if digits(client_query) else like)).fetchall()
         legacy=db().execute("SELECT legacy_staff_active FROM settings WHERE id=1").fetchone()
-        return render_template("staff_users.html",users=users,legacy_active=legacy["legacy_staff_active"])
+        return render_template("staff_users.html",users=users,clients=clients,q=client_query,legacy_active=legacy["legacy_staff_active"])
+
+    @app.post("/painel/configuracoes/clientes/<int:client_id>/alternar")
+    @primary_required
+    def admin_client_toggle(client_id):
+        client=db().execute("SELECT id,active FROM clients WHERE id=?",(client_id,)).fetchone()
+        if not client: abort(404)
+        db().execute("UPDATE clients SET active=?,session_version=session_version+1 WHERE id=?",(0 if client["active"] else 1,client_id))
+        audit("bloquear_cliente" if client["active"] else "ativar_cliente","cliente",client_id,"sessões encerradas")
+        db().commit(); flash("Acesso do cliente atualizado e sessões encerradas.","success")
+        return redirect(url_for("staff_users",q=request.args.get("q","")))
+
+    @app.post("/painel/configuracoes/clientes/<int:client_id>/encerrar-sessoes")
+    @primary_required
+    def admin_client_sessions(client_id):
+        updated=db().execute("UPDATE clients SET session_version=session_version+1 WHERE id=?",(client_id,))
+        if updated.rowcount != 1: abort(404)
+        audit("encerrar_sessoes","cliente",client_id); db().commit(); flash("Sessões do cliente encerradas.","success")
+        return redirect(url_for("staff_users"))
+
+    @app.post("/painel/configuracoes/clientes/<int:client_id>/recuperar-senha")
+    @primary_required
+    def admin_client_recovery(client_id):
+        client=db().execute("SELECT id,email,active FROM clients WHERE id=?",(client_id,)).fetchone()
+        if not client: abort(404)
+        if not client["active"] or not client["email"]:
+            flash("Ative a conta e cadastre um e-mail antes de iniciar a recuperação.","error")
+            return redirect(url_for("staff_users"))
+        cutoff=(now()-timedelta(minutes=15)).isoformat()
+        recent=db().execute("SELECT COUNT(id) total,MAX(created_at) latest FROM verification_codes WHERE client_id=? AND purpose='password_recovery' AND created_at>=?",(client_id,cutoff)).fetchone()
+        if recent["total"]>=3 or (recent["latest"] and now()-datetime.fromisoformat(recent["latest"])<timedelta(seconds=60)):
+            flash("Aguarde antes de solicitar um novo código.","error"); return redirect(url_for("staff_users"))
+        code=f"{secrets.randbelow(1000000):06d}"; created=now().isoformat()
+        sent,detail=send_code("email",client["email"],code)
+        db().execute("INSERT INTO verification_codes(client_id,purpose,channel,destination,code_hash,expires_at,attempts,sends,provider_status,created_at,used_at) VALUES(?,?,?,?,?,?,0,1,?,?,?)",
+            (client_id,"password_recovery","email",client["email"],hashlib.sha256(code.encode()).hexdigest(),(now()+timedelta(minutes=10)).isoformat(),detail,created,None if sent else created))
+        audit("iniciar_recuperacao_senha","cliente",client_id,"envio por e-mail aceito" if sent else "falha do provedor")
+        db().commit(); flash("O Gmail aceitou o envio do código." if sent else f"Não foi possível enviar o código. {detail}.","success" if sent else "error")
+        return redirect(url_for("staff_users"))
 
     @app.post("/painel/configuracoes/usuarios/<int:user_id>/editar")
     @primary_required
@@ -543,6 +651,15 @@ def create_app(test_config=None):
         flash("O Gmail aceitou o envio do código." if sent else f"Não foi possível enviar o código. {detail}.","success" if sent else "error")
         return redirect(url_for("staff_users"))
 
+    @app.post("/painel/configuracoes/usuarios/<int:user_id>/encerrar-sessoes")
+    @primary_required
+    def staff_user_sessions(user_id):
+        updated=db().execute("UPDATE staff_users SET session_version=session_version+1 WHERE id=? AND deleted_at IS NULL",(user_id,))
+        if updated.rowcount != 1: abort(404)
+        audit("encerrar_sessoes","usuario_equipe",user_id); db().commit()
+        flash("Sessões do membro da equipe encerradas.","success")
+        return redirect(url_for("staff_users"))
+
     @app.post("/painel/configuracoes/usuarios/desativar-legado")
     @primary_required
     def disable_legacy_staff():
@@ -558,6 +675,8 @@ def create_app(test_config=None):
 
     @app.get("/blog/<slug>")
     def blog_post(slug):
+        if slug == "como-funciona-guarda-aqui-adelinha":
+            return redirect(url_for("blog_post", slug="como-funciona-me-guarde-ponto-de-coleta-adelinha"), code=301)
         post = db().execute("SELECT slug,title,summary,body,cover_image,cover_alt,seo_title,seo_description,published_at,updated_at FROM blog_posts WHERE slug=? AND status='published'", (slug,)).fetchone()
         if not post: abort(404)
         return render_template("blog_post.html", post=post, formatted_body=format_blog_body(post["body"]))
@@ -601,6 +720,15 @@ def create_app(test_config=None):
     def blog_unpublish(post_id):
         db().execute("UPDATE blog_posts SET status='draft',updated_at=? WHERE id=?", (now().isoformat(), post_id)); db().commit()
         flash("Artigo retirado da publicação.", "success"); return redirect(url_for("blog_admin"))
+
+    @app.post("/painel/blog/<int:post_id>/excluir")
+    @admin_required
+    def blog_delete(post_id):
+        deleted=db().execute("DELETE FROM blog_posts WHERE id=?",(post_id,))
+        if deleted.rowcount != 1: abort(404)
+        audit("excluir_artigo","artigo",post_id); db().commit()
+        flash("Artigo excluído com sucesso!","success")
+        return redirect(url_for("blog_admin"))
 
     @app.get("/robots.txt")
     def robots():
@@ -653,18 +781,17 @@ def create_app(test_config=None):
         if db().execute("SELECT 1 FROM clients WHERE REPLACE(REPLACE(REPLACE(cpf,'.',''),'-',''),' ','')=?", (cpf,)).fetchone():
             flash("Este CPF já possui cadastro.", "error")
             return render_template("index.html", registration_form=form), 409
+        public_id = next_public_code(db(), "CLTPCA")
         cur = db().execute(
-            """INSERT INTO clients(name, cpf, phone, terms_version, terms_text, signature, accepted_at, password_hash,
+            """INSERT INTO clients(public_id,name, cpf, phone, terms_version, terms_text, signature, accepted_at, password_hash,
                residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,email)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
-            (name, cpf, phone, TERMS_VERSION, terms_text(), signature, accepted_at, generate_password_hash(password),
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
+            (public_id,name, cpf, phone, TERMS_VERSION, terms_text(), signature, accepted_at, generate_password_hash(password),
              digits(residential["residential_cep"]), residential["residential_street"], residential["residential_number"],
              residential["residential_district"], residential["residential_city"], residential["residential_state"].upper(),
              residential["residential_complement"] or None, email or None),
         )
         client_id = cur.fetchone()["id"]
-        public_id = f"CLTPCA-{client_id}"
-        db().execute("UPDATE clients SET public_id=? WHERE id=?", (public_id, client_id))
         integrity = hashlib.sha256((public_id + name + cpf + terms_text() + signature + accepted_at).encode()).hexdigest()
         db().execute("UPDATE clients SET contract_id=?,contract_hash=?,confirmation_channel=?,confirmation_destination=?,confirmation_validated_at=?,accept_ip=?,accept_user_agent=? WHERE id=?",
             (f"CTRPCA-{client_id}", integrity, confirmation.get("channel") if confirmation else "teste",
@@ -1074,7 +1201,8 @@ def create_app(test_config=None):
         pickup_packages = []
         if withdrawal:
             pickup_packages = db().execute(f"SELECT {PICKUP_PACKAGE_COLUMNS} FROM pickup_packages WHERE pickup_id=? ORDER BY package_id", (withdrawal["id"],)).fetchall()
-        return render_template("package_detail.html", package=package, withdrawal=withdrawal, pickup_packages=pickup_packages)
+        return render_template("package_detail.html", package=package, withdrawal=withdrawal, pickup_packages=pickup_packages,
+            pickup_success=request.args.get("retirada") == "sucesso")
 
     @app.get("/cliente/pacotes/<int:package_id>")
     @client_login_required
@@ -1356,7 +1484,7 @@ def create_app(test_config=None):
         except Exception:
             connection.rollback()
             raise
-        return redirect(url_for("receipt", pickup_id=pickup_id))
+        return redirect(url_for("receipt", pickup_id=pickup_id, retirada="sucesso"))
 
     @app.get("/comprovantes/<int:pickup_id>")
     @login_required
@@ -1365,7 +1493,7 @@ def create_app(test_config=None):
         if not pickup:
             abort(404)
         package = db().execute("SELECT package_id FROM pickup_packages WHERE pickup_id=? ORDER BY package_id LIMIT 1", (pickup_id,)).fetchone()
-        return redirect(url_for("package_detail", package_id=package["package_id"]))
+        return redirect(url_for("package_detail", package_id=package["package_id"], retirada=request.args.get("retirada")))
 
     @app.get("/comprovantes/<int:pickup_id>/pacotes/<int:package_id>.pdf")
     def receipt_pdf(pickup_id, package_id):
@@ -1399,6 +1527,12 @@ def fees(package, today=None):
     return calculate_fees(package["base_price"], package["notified_at"], package["picked_at"], today)
 
 
+def next_public_code(connection, prefix):
+    row = connection.execute("""INSERT INTO id_sequences(prefix,last_value) VALUES(?,1)
+        ON CONFLICT(prefix) DO UPDATE SET last_value=id_sequences.last_value+1 RETURNING last_value""", (prefix,)).fetchone()
+    return f"{prefix}-{row['last_value']}"
+
+
 def init_db(database):
     if not is_postgres(database):
         Path(database).parent.mkdir(parents=True, exist_ok=True)
@@ -1423,6 +1557,9 @@ def init_db(database):
         f"CREATE TABLE IF NOT EXISTS site_themes (id {id_type}, name TEXT NOT NULL, colors TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL)",
         f"CREATE TABLE IF NOT EXISTS staff_users (id {id_type}, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, role TEXT NOT NULL, is_primary INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, can_settings INTEGER NOT NULL DEFAULT 0, can_users INTEGER NOT NULL DEFAULT 0, can_clients INTEGER NOT NULL DEFAULT 1, can_packages INTEGER NOT NULL DEFAULT 1, can_pickups INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, session_version INTEGER NOT NULL DEFAULT 1, deleted_at TEXT, last_login_at TEXT)",
         f"CREATE TABLE IF NOT EXISTS staff_recovery_codes (id {id_type}, staff_user_id BIGINT NOT NULL REFERENCES staff_users(id), code_hash TEXT NOT NULL, expires_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, provider_status TEXT, created_at TEXT NOT NULL, used_at TEXT)",
+        "CREATE TABLE IF NOT EXISTS id_sequences (prefix TEXT PRIMARY KEY, last_value BIGINT NOT NULL)",
+        f"CREATE TABLE IF NOT EXISTS analytics_events (id {id_type}, visitor_id TEXT NOT NULL, event_type TEXT NOT NULL, path TEXT, origin TEXT, device TEXT, created_at TEXT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_analytics_events_created ON analytics_events(created_at,event_type)",
     ]
     for statement in statements:
         connection.execute(statement)
@@ -1447,15 +1584,17 @@ def init_db(database):
         "service_amount": "REAL", "late_days": "INTEGER", "total_amount": "REAL",
     })
     ensure_columns(connection, "settings", {"header_image": "BYTEA" if connection.postgres else "BLOB", "header_image_mime": "TEXT", "active_theme_id": "BIGINT", "legacy_staff_active": "INTEGER NOT NULL DEFAULT 1"})
-    ensure_columns(connection, "staff_users", {"can_clients": "INTEGER NOT NULL DEFAULT 1", "can_packages": "INTEGER NOT NULL DEFAULT 1", "can_pickups": "INTEGER NOT NULL DEFAULT 1", "session_version":"INTEGER NOT NULL DEFAULT 1", "deleted_at":"TEXT", "last_login_at":"TEXT"})
+    ensure_columns(connection, "staff_users", {"public_id":"TEXT", "can_clients": "INTEGER NOT NULL DEFAULT 1", "can_packages": "INTEGER NOT NULL DEFAULT 1", "can_pickups": "INTEGER NOT NULL DEFAULT 1", "session_version":"INTEGER NOT NULL DEFAULT 1", "deleted_at":"TEXT", "last_login_at":"TEXT"})
     ensure_columns(connection, "packages", {"reminder_sent_at": "TEXT", "forwarded_at": "TEXT"})
     duplicate_tracking = connection.execute("""SELECT 1 FROM packages WHERE tracking IS NOT NULL AND trim(tracking)!=''
         GROUP BY UPPER(trim(tracking)) HAVING COUNT(*)>1 LIMIT 1""").fetchone()
     if not duplicate_tracking:
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_packages_tracking ON packages(UPPER(trim(tracking)))")
+    # Migração não destrutiva do endereço antigo; a rota antiga permanece com redirecionamento 301.
+    connection.execute("UPDATE blog_posts SET slug='como-funciona-me-guarde-ponto-de-coleta-adelinha' WHERE slug='como-funciona-guarda-aqui-adelinha' AND NOT EXISTS(SELECT 1 FROM blog_posts WHERE slug='como-funciona-me-guarde-ponto-de-coleta-adelinha')")
     initial_posts = [
         ("receber-compras-online-em-franca", "Como receber compras online em Franca sem estar em casa", "Conheça uma alternativa para receber encomendas fora de casa.", "O Me Guarde do Ponto de Coleta Adelinha recebe e armazena seus pacotes para retirada no Jardim Adelinha. Cadastre-se, use seu nome e código na compra e aguarde o aviso de chegada."),
-        ("como-funciona-guarda-aqui-adelinha", "Como funciona o Me Guarde do Ponto de Coleta Adelinha", "Cadastro, aviso, prazo e retirada explicados.", "Após o cadastro e assinatura do contrato, use o endereço do ponto e seu código. Pacotes pequenos custam R$ 4,90 e grandes R$ 9,90. O prazo sem adicional é de quatro dias corridos."),
+        ("como-funciona-me-guarde-ponto-de-coleta-adelinha", "Como funciona o Me Guarde do Ponto de Coleta Adelinha", "Cadastro, aviso, prazo e retirada explicados.", "## Como funciona\n\nApós o cadastro e assinatura do contrato, use o endereço do Ponto de Coleta Adelinha no Jardim Adelinha, Franca SP, junto do seu código.\n\n- Cadastre-se e copie o destinatário.\n- Aguarde o aviso de chegada.\n- Retire e pague por Pix ou dinheiro.\n\n## Tamanhos, prazo e cuidados\n\nPacotes pequenos custam R$ 4,90 e grandes R$ 9,90. O prazo sem adicional é de quatro dias corridos. O Me Guarde recebe e guarda encomendas; não se apresenta como Agência Correios, Agência Shopee ou ponto credenciado de postagem de plataformas."),
         ("endereco-para-receber-compras-adelinha", "Qual endereço usar para receber suas compras no Ponto de Coleta Adelinha", "Veja como identificar corretamente sua entrega.", "Use Rua Afonso Borges de Freitas, 795, Jardim Adelinha, Franca – SP, com o CEP exibido no sistema, além do seu nome completo e código de cliente."),
         ("quanto-custa-guardar-encomenda", "Quanto custa receber e guardar uma encomenda", "Entenda valores, limites e atraso.", "Pequeno: soma até 80 cm e 10 kg, R$ 4,90. Grande: soma até 150 cm e 20 kg, R$ 9,90. Desde o quinto dia há R$ 0,50 por dia e pacote."),
         ("retirada-de-pacotes-por-outra-pessoa", "Como funciona a retirada de pacotes por outra pessoa", "Documentos e autorização para retirada por terceiro.", "Outra pessoa pode retirar com autorização verificável do titular, documento oficial próprio com foto e assinatura no comprovante de retirada."),
@@ -1464,6 +1603,30 @@ def init_db(database):
     for slug, title, summary, body in initial_posts:
         connection.execute("INSERT INTO blog_posts(slug,title,summary,body,cover_alt,seo_title,seo_description,status,published_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(slug) DO NOTHING",
             (slug,title,summary,body,"",title,summary,"published",published,published))
+    existing_clients=connection.execute("SELECT public_id FROM clients WHERE public_id IS NOT NULL AND trim(public_id)!=''").fetchall()
+    client_max=0
+    for item in existing_clients:
+        match=re.fullmatch(r"CLTPCA-(\d+)",item["public_id"] or "")
+        if match: client_max=max(client_max,int(match.group(1)))
+    if client_max:
+        connection.execute("INSERT INTO id_sequences(prefix,last_value) VALUES('CLTPCA',?) ON CONFLICT(prefix) DO UPDATE SET last_value=CASE WHEN id_sequences.last_value < ? THEN ? ELSE id_sequences.last_value END",(client_max,client_max,client_max))
+    role_prefix={"administrador":"ADMPCA","gerente":"GERPCA","atendente":"ATEPCA"}
+    # Sincroniza as sequências com códigos já existentes antes de gerar novos.
+    # Assim uma migração nunca reutiliza números, mesmo que a tabela de sequência
+    # seja criada depois das contas.
+    existing_staff=connection.execute("SELECT public_id FROM staff_users WHERE public_id IS NOT NULL AND trim(public_id)!=''").fetchall()
+    maxima={prefix:0 for prefix in role_prefix.values()}
+    for item in existing_staff:
+        match=re.fullmatch(r"(ADMPCA|GERPCA|ATEPCA)-(\d+)",item["public_id"] or "")
+        if match: maxima[match.group(1)]=max(maxima[match.group(1)],int(match.group(2)))
+    for prefix,maximum in maxima.items():
+        if maximum:
+            connection.execute("INSERT INTO id_sequences(prefix,last_value) VALUES(?,?) ON CONFLICT(prefix) DO UPDATE SET last_value=CASE WHEN id_sequences.last_value < ? THEN ? ELSE id_sequences.last_value END",(prefix,maximum,maximum,maximum))
+    staff_rows=connection.execute("SELECT id,role FROM staff_users WHERE public_id IS NULL OR trim(public_id)='' ORDER BY id").fetchall()
+    for staff in staff_rows:
+        prefix=role_prefix.get(staff["role"],"ATEPCA")
+        connection.execute("UPDATE staff_users SET public_id=? WHERE id=?",(next_public_code(connection,prefix),staff["id"]))
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_staff_users_public_id ON staff_users(public_id)")
     # O nome completo é mostrado na interface; pix_payload aplica o limite EMV de 25 caracteres.
     connection.execute("UPDATE settings SET pix_receiver_name=? WHERE id=1", (PIX_RECEIVER_NAME,))
     connection.commit()

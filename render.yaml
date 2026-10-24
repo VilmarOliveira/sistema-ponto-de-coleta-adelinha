@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: sistema-ponto-de-coleta-adelinha
+    name: ponto-coleta-adelinha-teste
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt

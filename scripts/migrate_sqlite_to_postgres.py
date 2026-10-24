@@ -15,7 +15,7 @@ TABLES = (
     "clients", "packages", "pickups", "pickup_packages", "password_tokens",
     "login_attempts", "audit_logs", "settings", "blog_posts", "verification_codes",
     "reminder_logs", "site_banners", "site_photos", "site_themes", "staff_users",
-    "staff_recovery_codes",
+    "staff_recovery_codes", "id_sequences", "analytics_events",
 )
 
 
