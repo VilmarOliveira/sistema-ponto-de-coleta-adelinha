@@ -224,7 +224,7 @@ def create_app(test_config=None):
     def protect_session_pages(response):
         # A página inicial muda conforme a sessão; dados autenticados nunca devem
         # ser reaproveitados por caches compartilhados da Oracle ou do navegador.
-        if request.endpoint == "index" or session.get("staff") or session.get("client_id"):
+        if request.endpoint == "index" or ((session.get("staff") or session.get("client_id")) and request.endpoint not in {"header_identity", "main_service_banner"}):
             response.headers["Cache-Control"] = "private, no-store, max-age=0"
             response.headers["Vary"] = "Cookie"
         return response
@@ -340,8 +340,23 @@ def create_app(test_config=None):
     def index():
         banners = db().execute("SELECT id,alt_text,position,updated_at FROM site_banners ORDER BY position,id LIMIT 3").fetchall()
         photos = db().execute("SELECT id,kind,alt_text,position,updated_at FROM site_photos ORDER BY position,id LIMIT 3").fetchall()
+        setting = db().execute("SELECT main_banner_updated_at FROM settings WHERE id=1").fetchone()
         show_registration = not (session.get("client_id") or session.get("staff")) or bool(session.get("staff") and request.args.get("cadastro") == "1")
-        return render_template("index.html", banners=banners, photos=photos, show_registration=show_registration)
+        return render_template("index.html", banners=banners, photos=photos, show_registration=show_registration,
+                               main_banner_version=setting["main_banner_updated_at"] if setting else "default")
+
+    @app.get("/identidade/banner-principal")
+    def main_service_banner():
+        setting = db().execute(
+            "SELECT main_banner_image,main_banner_mime,main_banner_updated_at FROM settings WHERE id=1"
+        ).fetchone()
+        if setting and setting["main_banner_image"]:
+            return Response(
+                bytes(setting["main_banner_image"]),
+                mimetype=setting["main_banner_mime"],
+                headers={"Cache-Control": "public,max-age=3600"},
+            )
+        return redirect(url_for("static", filename="me-guarde-banner.svg", v="default-1"))
 
     @app.post("/metricas/evento")
     def analytics_event():
@@ -413,9 +428,25 @@ def create_app(test_config=None):
     @admin_required
     def visual_identity():
         if request.method == "POST":
+            action = request.form.get("action", "header")
             if request.form.get("restore") == "yes":
                 db().execute("UPDATE settings SET header_image=NULL,header_image_mime=NULL WHERE id=1")
                 audit("restaurar_identidade_visual", "configuracao", 1)
+            elif action == "restore_main_banner":
+                db().execute("UPDATE settings SET main_banner_image=NULL,main_banner_mime=NULL,main_banner_updated_at=? WHERE id=1", (now().isoformat(),))
+                audit("restaurar_banner_principal", "configuracao", 1)
+            elif action == "main_banner":
+                upload = request.files.get("main_banner_image")
+                data = upload.read(2 * 1024 * 1024 + 1) if upload else b""
+                mime = validated_image_type(data, 2 * 1024 * 1024)
+                if not data or len(data) > 2 * 1024 * 1024 or not mime:
+                    flash("Envie um banner PNG, JPG ou WebP de até 2 MB.", "error")
+                    return render_template("visual_identity.html", main_banner_version=now().timestamp()), 400
+                db().execute(
+                    "UPDATE settings SET main_banner_image=?,main_banner_mime=?,main_banner_updated_at=? WHERE id=1",
+                    (data, mime, now().isoformat()),
+                )
+                audit("alterar_banner_principal", "configuracao", 1)
             else:
                 upload = request.files.get("image")
                 data = upload.read(5 * 1024 * 1024 + 1) if upload else b""
@@ -428,7 +459,8 @@ def create_app(test_config=None):
             db().commit()
             flash("Identidade visual alterada com sucesso!", "success")
             return redirect(url_for("visual_identity"))
-        return render_template("visual_identity.html")
+        setting = db().execute("SELECT main_banner_updated_at FROM settings WHERE id=1").fetchone()
+        return render_template("visual_identity.html", main_banner_version=setting["main_banner_updated_at"] if setting else "default")
 
     @app.get("/banners/<int:banner_id>/imagem")
     def banner_image(banner_id):
@@ -1583,7 +1615,8 @@ def init_db(database):
         "tracking_code": "TEXT", "package_category": "TEXT", "notified_at": "TEXT",
         "service_amount": "REAL", "late_days": "INTEGER", "total_amount": "REAL",
     })
-    ensure_columns(connection, "settings", {"header_image": "BYTEA" if connection.postgres else "BLOB", "header_image_mime": "TEXT", "active_theme_id": "BIGINT", "legacy_staff_active": "INTEGER NOT NULL DEFAULT 1"})
+    ensure_columns(connection, "settings", {"header_image": "BYTEA" if connection.postgres else "BLOB", "header_image_mime": "TEXT", "active_theme_id": "BIGINT", "legacy_staff_active": "INTEGER NOT NULL DEFAULT 1",
+        "main_banner_image": "BYTEA" if connection.postgres else "BLOB", "main_banner_mime": "TEXT", "main_banner_updated_at": "TEXT"})
     ensure_columns(connection, "staff_users", {"public_id":"TEXT", "can_clients": "INTEGER NOT NULL DEFAULT 1", "can_packages": "INTEGER NOT NULL DEFAULT 1", "can_pickups": "INTEGER NOT NULL DEFAULT 1", "session_version":"INTEGER NOT NULL DEFAULT 1", "deleted_at":"TEXT", "last_login_at":"TEXT"})
     ensure_columns(connection, "packages", {"reminder_sent_at": "TEXT", "forwarded_at": "TEXT"})
     duplicate_tracking = connection.execute("""SELECT 1 FROM packages WHERE tracking IS NOT NULL AND trim(tracking)!=''

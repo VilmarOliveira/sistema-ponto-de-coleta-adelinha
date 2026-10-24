@@ -25,9 +25,10 @@ def test_me_guarde_home_support_and_email_only_recovery(tmp_path):
     app = create_app({"TESTING": True, "SECRET_KEY": "test", "DATABASE": str(tmp_path / "app.db")})
     client = app.test_client()
     home = client.get("/").text
-    hero = home.split('<section class="hero">', 1)[1].split("</section>", 1)[0]
+    hero = home.split('<section class="main-service-banner"', 1)[1].split("</section>", 1)[0]
     assert "ME GUARDE" in hero and "COMPROU? DEIXA COM A GENTE." in hero
     assert "PONTO DE COLETA ADELINHA" not in hero.upper()
+    assert "Recebemos e guardamos suas compras" not in hero
     assert 'aria-label="Fale com a gente pelo WhatsApp"' in home
     assert "wa.me/5516988004966" in home
     recovery = client.get("/cliente/recuperar-senha").text
@@ -54,6 +55,27 @@ def test_banner_upload_home_display_and_persistence(tmp_path):
     assert client.get("/banners/1/imagem").data == image
     restarted = create_app({"TESTING": True, "SECRET_KEY": "test", "DATABASE": database}).test_client()
     assert restarted.get("/banners/1/imagem").data == image
+
+
+def test_main_banner_upload_is_separate_and_persists(tmp_path):
+    database = str(tmp_path / "app.db")
+    app = create_app({"TESTING": True, "SECRET_KEY": "test", "DATABASE": database})
+    client = app.test_client(); legacy_login(client)
+    output = io.BytesIO()
+    Image.new("RGB", (960, 300), "white").save(output, "WEBP")
+    image = output.getvalue()
+    response = client.post("/painel/configuracoes/identidade", data={
+        "action": "main_banner", "main_banner_image": (io.BytesIO(image), "principal.webp"),
+        "csrf_token": csrf(client),
+    }, content_type="multipart/form-data", follow_redirects=True)
+    assert response.status_code == 200
+    assert "Banner principal Me Guarde" in response.text
+    assert client.get("/identidade/banner-principal").data == image
+    restarted = create_app({"TESTING": True, "SECRET_KEY": "test", "DATABASE": database}).test_client()
+    assert restarted.get("/identidade/banner-principal").data == image
+    home = restarted.get("/").text
+    assert 'class="main-service-banner"' in home
+    assert 'class="hero-service"' not in home
 
 
 def test_theme_persists_and_staff_permissions_are_enforced(tmp_path):
