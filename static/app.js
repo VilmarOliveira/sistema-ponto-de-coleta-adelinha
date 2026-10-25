@@ -431,7 +431,7 @@ document.querySelectorAll('[data-carousel]').forEach((carousel) => {
     clearInterval(timer);
     const paused = reducedMotion.matches || hovered || focused || touching || document.hidden;
     track.setAttribute('aria-live', paused ? 'polite' : 'off');
-    if (!paused) timer = setInterval(() => show(current + 1), 5000);
+    if (!paused) timer = setInterval(() => show(current + 1), 3000);
   };
   const navigate = (index) => { show(index); schedule(); };
   dots.forEach((dot, index) => dot.addEventListener('click', () => navigate(index)));
