@@ -410,19 +410,55 @@ document.querySelector('#send-registration-code')?.addEventListener('click',asyn
 
 document.querySelectorAll('[data-carousel]').forEach((carousel) => {
   const slides = [...carousel.querySelectorAll('[data-slide]')];
+  if (slides.length < 2) return;
   const dots = [...carousel.querySelectorAll('[data-slide-to]')];
   const pause = carousel.querySelector('[data-carousel-pause]');
-  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let current = 0; let timer; let paused = reduced;
+  const track = carousel.querySelector('.banner-slides');
+  let current = 0;
+  let timer;
+  let paused = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const show = (index) => {
-    current = index; slides.forEach((slide, i) => slide.classList.toggle('active', i === index));
-    dots.forEach((dot, i) => i === index ? dot.setAttribute('aria-current', 'true') : dot.removeAttribute('aria-current'));
+    current = (index + slides.length) % slides.length;
+    slides.forEach((slide, i) => {
+      slide.classList.toggle('active', i === current);
+      slide.setAttribute('aria-hidden', String(i !== current));
+    });
+    dots.forEach((dot, i) => i === current ? dot.setAttribute('aria-current', 'true') : dot.removeAttribute('aria-current'));
   };
-  const schedule = () => { clearInterval(timer); if (!paused && slides.length > 1) timer = setInterval(() => show((current + 1) % slides.length), 5000); };
-  dots.forEach((dot, index) => dot.addEventListener('click', () => { show(index); schedule(); }));
-  pause?.addEventListener('click', () => { paused = !paused; pause.textContent = paused ? 'Retomar' : 'Pausar'; pause.setAttribute('aria-label', paused ? 'Retomar rotação' : 'Pausar rotação'); schedule(); });
-  document.addEventListener('visibilitychange', () => document.hidden ? clearInterval(timer) : schedule());
-  schedule();
+  const schedule = () => {
+    clearInterval(timer);
+    if (!paused && !document.hidden) timer = setInterval(() => show(current + 1), 5000);
+  };
+  const navigate = (index) => { show(index); schedule(); };
+  dots.forEach((dot, index) => dot.addEventListener('click', () => navigate(index)));
+  carousel.querySelector('[data-carousel-prev]').addEventListener('click', () => navigate(current - 1));
+  carousel.querySelector('[data-carousel-next]').addEventListener('click', () => navigate(current + 1));
+  const updatePause = () => {
+    pause.textContent = paused ? 'Retomar' : 'Pausar';
+    pause.setAttribute('aria-label', paused ? 'Retomar rotação' : 'Pausar rotação');
+    pause.setAttribute('aria-pressed', String(paused));
+    track.setAttribute('aria-live', paused ? 'polite' : 'off');
+  };
+  pause.addEventListener('click', () => { paused = !paused; updatePause(); schedule(); });
+  carousel.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault(); navigate(current + (event.key === 'ArrowRight' ? 1 : -1));
+    }
+  });
+  let touchStart;
+  track.addEventListener('touchstart', (event) => {
+    touchStart = event.touches.length === 1 ? {x: event.touches[0].clientX, y: event.touches[0].clientY} : null;
+  }, {passive: true});
+  track.addEventListener('touchend', (event) => {
+    if (!touchStart || !event.changedTouches.length) return;
+    const dx = event.changedTouches[0].clientX - touchStart.x;
+    const dy = event.changedTouches[0].clientY - touchStart.y;
+    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) navigate(current + (dx < 0 ? 1 : -1));
+    touchStart = null;
+  }, {passive: true});
+  track.addEventListener('touchcancel', () => { touchStart = null; }, {passive: true});
+  document.addEventListener('visibilitychange', schedule);
+  updatePause(); schedule();
 });
 
 const themeForm = document.querySelector('#theme-form');
@@ -438,14 +474,52 @@ if (themeForm) {
 }
 
 document.querySelectorAll('[data-banner-upload]').forEach((input) => {
-  input.addEventListener('change', () => {
-    const preview = input.closest('form').querySelector('[data-banner-preview]');
+  const form = input.closest('form');
+  const preview = form.querySelector('[data-banner-preview]');
+  const error = form.querySelector('[data-upload-error]');
+  const originalSrc = preview?.getAttribute('src');
+  const resetPreview = () => {
+    if (!preview) return;
+    if (preview.dataset.objectUrl) URL.revokeObjectURL(preview.dataset.objectUrl);
+    delete preview.dataset.objectUrl;
+    if (originalSrc) { preview.src = originalSrc; preview.hidden = false; }
+    else { preview.removeAttribute('src'); preview.hidden = true; }
+  };
+  const invalid = () => {
+    resetPreview(); input.value = '';
+    const message = 'Imagem inválida. Envie PNG, JPG ou WebP de até 900 KB. A imagem anterior foi preservada.';
+    input.setCustomValidity(message);
+    if (error) { error.textContent = message; error.hidden = false; }
+    input.reportValidity();
+  };
+  input.addEventListener('change', async () => {
+    input.setCustomValidity('');
+    if (error) error.hidden = true;
     const file = input.files[0];
-    if (!preview || !file) return;
-    const previous = preview.dataset.objectUrl;
-    if (previous) URL.revokeObjectURL(previous);
+    resetPreview();
+    if (!file) return;
+    if (file.size > 900 * 1024 || !['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) { invalid(); return; }
+    // Confere a assinatura real e a decodificação, além do MIME fornecido pelo navegador.
+    input.setCustomValidity('Aguarde a validação da imagem.');
+    const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+    if (input.files[0] !== file) return;
+    const png = [137,80,78,71,13,10,26,10].every((b,i) => bytes[i] === b);
+    const jpg = bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
+    const webp = String.fromCharCode(...bytes.slice(0,4)) === 'RIFF' && String.fromCharCode(...bytes.slice(8,12)) === 'WEBP';
+    if (!png && !jpg && !webp) { invalid(); return; }
     const url = URL.createObjectURL(file);
-    preview.dataset.objectUrl = url; preview.src = url; preview.hidden = false;
+    const image = new Image();
+    image.onload = () => {
+      if (input.files[0] !== file) { URL.revokeObjectURL(url); return; }
+      input.setCustomValidity('');
+      if (preview) { preview.dataset.objectUrl = url; preview.src = url; preview.hidden = false; }
+      else URL.revokeObjectURL(url);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      if (input.files[0] === file) invalid();
+    };
+    image.src = url;
   });
 });
 

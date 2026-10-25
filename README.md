@@ -48,7 +48,7 @@ Os testes cobrem proteção do painel, limites exatos das categorias, bloqueio d
 
 ### Personalização e equipe
 
-Na **Área do Ponto**, as opções ficam agrupadas em **Configurações**. Administradores podem gerenciar identidade visual, banners, fotos reais do local, aparência, Pix e integrações. Os banners (até três imagens PNG, JPG ou WebP de no máximo 300 KB), fotos e temas ficam no mesmo banco PostgreSQL/Neon, por isso sobrevivem a novos deploys sem disco do Render.
+Na **Área do Ponto**, as opções ficam agrupadas em **Configurações**. Administradores podem gerenciar identidade visual, banners, fotos reais do local, aparência, Pix e integrações. Os banners (até três imagens ativas PNG, JPG ou WebP de no máximo 900 KB, com medidas recomendadas de 2048 × 684 px), fotos e temas ficam no mesmo banco PostgreSQL/Neon, por isso sobrevivem a novos deploys sem disco do Render.
 
 Crie uma conta de **Administrador**, saia e confirme um login nela antes de excluir o acesso administrativo anterior. O sistema bloqueia a exclusão, desativação ou mudança de perfil que deixaria o sistema sem administrador ativo. Os perfis Gerente e Atendente recebem apenas permissões operacionais; contas desativadas ou excluídas têm suas sessões invalidadas. Não coloque credenciais pessoais no código ou em variáveis versionadas.
 
@@ -201,9 +201,15 @@ Nunca substitua nem apague `adelinha.db` durante uma atualização. Faça també
 
 Nesta atualização, a inicialização também acrescenta os campos de histórico do comprovante. Novas retiradas passam a guardar uma fotografia dos IDs, nome do cliente, valores, atraso e pagamento. Retiradas antigas são preservadas; campos que nunca foram gravados aparecem como **“Não registrado”**. A geração do PDF usa `reportlab`, instalado automaticamente pelo `requirements.txt`.
 
+### Banners do topo
+
+Em **Configurações → Banners**, o administrador gerencia a imagem Me Guarde e os outros dois banners em uma única tela: prévia, substituição, ordem e ativação. O carrossel usa a área abaixo do menu, exibe a imagem completa e alterna a cada cinco segundos, com setas, indicadores, pausa e navegação por toque. Uma única imagem ativa aparece sem controles. O limite é de **900 KB (921.600 bytes)** por arquivo PNG, JPG ou WebP; recomendação: **2048 × 684 px**.
+
+A migração preserva as imagens anteriores e inclui o banner principal na rotação. Se já existiam três banners adicionais, o terceiro é preservado e desativado: ele permanece disponível na administração, onde é possível desativar outra imagem para ativá-lo. A ordem, as imagens e a ativação ficam no banco e sobrevivem aos reinícios. Uploads inválidos mantêm a configuração e a imagem anterior.
+
 ### Dados do Pix
 
-O titular é **AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS** e a chave CNPJ é `38145273000105`. A tela mostra o nome completo. Ao gerar o QR Code e o Pix Copia e Cola, o sistema aplica automaticamente o limite de 25 caracteres do padrão técnico Pix; a conferência do crédito continua manual.
+Os dados iniciais são o titular **AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS** e a chave CNPJ `38145273000105`. Em **Configurações → Pix → Editar dados do Pix**, somente o administrador pode alterar titular, tipo e chave. A tela mostra o nome completo. São aceitas chaves CPF/CNPJ com dígitos verificadores válidos, e-mail de até 77 caracteres, telefone internacional com `+` e chave aleatória UUID. Cancelar não salva alterações. Os novos dados passam a ser usados nas próximas cobranças; cada retirada Pix guarda seus próprios dados para preservar os comprovantes. Ao gerar o QR Code e o Pix Copia e Cola, o sistema aplica automaticamente o limite de 25 caracteres do padrão técnico Pix; a conferência do crédito continua manual.
 
 ### Migração dos endereços
 

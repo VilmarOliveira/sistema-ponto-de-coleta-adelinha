@@ -29,7 +29,7 @@ Não há dependências novas nem migração de dados específica desta atualiza�
    ```
 
 4. No domínio da instalação, confira `/health`: deve responder HTTP 200 com `{"status":"ok"}`. Abra a página inicial no computador e no celular. O banner deve aparecer inteiro abaixo do menu, e o WhatsApp deve abrir o atendimento existente. A nova versão do service worker atualiza o cache dos estilos; recarregue a página caso um navegador ainda mostre a versão anterior.
-5. Em **Configurações → Banner principal Me Guarde**, confira a imagem. Se já havia um banner personalizado no banco, ele é preservado: clique em **Restaurar banner principal padrão** para usar a arte original incluída nesta atualização, ou envie o arquivo original desejado. Recomendação: 2170 × 725 px, PNG/JPG/WebP, limite de 2 MB. A prévia permite conferir a imagem antes de salvar.
+5. Em **Configurações → Banners**, confira a imagem. Se já havia um banner personalizado no banco, ele é preservado: substitua a imagem nessa tela se desejar outra arte. Recomendação atual: 2048 × 684 px, PNG/JPG/WebP, limite de 900 KB. O banner principal participa do carrossel com até três imagens ativas. A prévia permite conferir a imagem antes de salvar.
 6. Em **Configurações → Usuários**, confira as abas **Clientes** e **Membros da equipe**, suas buscas, os botões de adicionar e as ações disponíveis. No celular, cada registro aparece como cartão. Somente os administradores com permissão de usuários (e o acesso administrativo legado enquanto habilitado) têm acesso a essa gestão; gerentes e atendentes mantêm as permissões operacionais existentes.
 
 ## Validação desta implementação

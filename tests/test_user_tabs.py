@@ -76,7 +76,7 @@ def test_banner_dedicated_settings_preserve_original_and_other_images(users_app)
     response = client.post('/painel/configuracoes/banner-principal', data={
         'main_banner_image': (io.BytesIO(original), 'original.png'), 'csrf_token': csrf(client),
     }, content_type='multipart/form-data', follow_redirects=True)
-    assert response.status_code == 200 and '2170 × 725' in response.text
+    assert response.status_code == 200 and '2048 × 684' in response.text
     assert client.get('/identidade/banner-principal').data == original
     with sqlite3.connect(app.config['DATABASE']) as db:
         assert db.execute('SELECT header_image FROM settings').fetchone() == (None,)

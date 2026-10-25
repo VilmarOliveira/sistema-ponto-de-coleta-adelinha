@@ -115,7 +115,10 @@ def calculate_fees(base_price, notified_at=None, picked_at=None, today: date | N
 
 
 def _emv_field(identifier, value):
-    return f"{identifier}{len(value):02d}{value}"
+    length = len(value.encode("utf-8"))
+    if length > 99:
+        raise ValueError("Campo Pix excede o limite técnico de 99 bytes.")
+    return f"{identifier}{length:02d}{value}"
 
 
 def pix_payload(key, receiver_name, amount):
@@ -123,6 +126,8 @@ def pix_payload(key, receiver_name, amount):
     if not receiver_name or amount <= 0:
         raise ValueError("Nome do recebedor e valor são obrigatórios.")
     receiver = unicodedata.normalize("NFKD", receiver_name).encode("ascii", "ignore").decode().strip().upper()[:25]
+    if not receiver or not key or not key.isascii() or len(key) > 77:
+        raise ValueError("Nome ou chave Pix inválidos para o formato Pix.")
     merchant = _emv_field("00", "BR.GOV.BCB.PIX") + _emv_field("01", key)
     payload = "".join((_emv_field("00", "01"), _emv_field("26", merchant), _emv_field("52", "0000"),
         _emv_field("53", "986"), _emv_field("54", f"{amount:.2f}"), _emv_field("58", "BR"),
