@@ -203,7 +203,7 @@ Nesta atualização, a inicialização também acrescenta os campos de históric
 
 ### Banners do topo
 
-Em **Configurações → Banners**, o administrador gerencia a imagem Me Guarde e os outros dois banners em uma única tela: prévia, substituição, ordem e ativação. O carrossel usa a área abaixo do menu, exibe a imagem completa e alterna a cada cinco segundos, com setas, indicadores, pausa e navegação por toque. Uma única imagem ativa aparece sem controles. O limite é de **900 KB (921.600 bytes)** por arquivo PNG, JPG ou WebP; recomendação: **2048 × 684 px**.
+Em **Configurações → Banners**, o administrador gerencia a imagem Me Guarde e os outros dois banners em uma única tela: prévia, substituição, ordem e ativação. O carrossel usa a área abaixo do menu, exibe a imagem completa e alterna a cada cinco segundos, com indicadores e navegação por toque. A rotação pausa enquanto o mouse está sobre o carrossel ou o foco do teclado está dentro dele, e fica desativada quando o dispositivo solicita movimento reduzido. Uma única imagem ativa aparece sem controles. O limite é de **900 KB (921.600 bytes)** por arquivo PNG, JPG ou WebP; recomendação: **2048 × 684 px**.
 
 A migração preserva as imagens anteriores e inclui o banner principal na rotação. Se já existiam três banners adicionais, o terceiro é preservado e desativado: ele permanece disponível na administração, onde é possível desativar outra imagem para ativá-lo. A ordem, as imagens e a ativação ficam no banco e sobrevivem aos reinícios. Uploads inválidos mantêm a configuração e a imagem anterior.
 

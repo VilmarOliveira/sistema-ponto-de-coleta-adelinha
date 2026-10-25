@@ -412,11 +412,13 @@ document.querySelectorAll('[data-carousel]').forEach((carousel) => {
   const slides = [...carousel.querySelectorAll('[data-slide]')];
   if (slides.length < 2) return;
   const dots = [...carousel.querySelectorAll('[data-slide-to]')];
-  const pause = carousel.querySelector('[data-carousel-pause]');
   const track = carousel.querySelector('.banner-slides');
   let current = 0;
   let timer;
-  let paused = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  let hovered = matchMedia('(hover: hover)').matches && carousel.matches(':hover');
+  let focused = carousel.contains(document.activeElement);
+  let touching = false;
   const show = (index) => {
     current = (index + slides.length) % slides.length;
     slides.forEach((slide, i) => {
@@ -427,19 +429,23 @@ document.querySelectorAll('[data-carousel]').forEach((carousel) => {
   };
   const schedule = () => {
     clearInterval(timer);
-    if (!paused && !document.hidden) timer = setInterval(() => show(current + 1), 5000);
+    const paused = reducedMotion.matches || hovered || focused || touching || document.hidden;
+    track.setAttribute('aria-live', paused ? 'polite' : 'off');
+    if (!paused) timer = setInterval(() => show(current + 1), 5000);
   };
   const navigate = (index) => { show(index); schedule(); };
   dots.forEach((dot, index) => dot.addEventListener('click', () => navigate(index)));
-  carousel.querySelector('[data-carousel-prev]').addEventListener('click', () => navigate(current - 1));
-  carousel.querySelector('[data-carousel-next]').addEventListener('click', () => navigate(current + 1));
-  const updatePause = () => {
-    pause.textContent = paused ? 'Retomar' : 'Pausar';
-    pause.setAttribute('aria-label', paused ? 'Retomar rotação' : 'Pausar rotação');
-    pause.setAttribute('aria-pressed', String(paused));
-    track.setAttribute('aria-live', paused ? 'polite' : 'off');
-  };
-  pause.addEventListener('click', () => { paused = !paused; updatePause(); schedule(); });
+  carousel.addEventListener('pointerenter', (event) => {
+    if (event.pointerType === 'mouse') { hovered = true; schedule(); }
+  });
+  carousel.addEventListener('pointerleave', (event) => {
+    if (event.pointerType === 'mouse') { hovered = false; schedule(); }
+  });
+  carousel.addEventListener('focusin', () => { focused = true; schedule(); });
+  carousel.addEventListener('focusout', (event) => {
+    focused = carousel.contains(event.relatedTarget); schedule();
+  });
+  reducedMotion.addEventListener('change', schedule);
   carousel.addEventListener('keydown', (event) => {
     if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
       event.preventDefault(); navigate(current + (event.key === 'ArrowRight' ? 1 : -1));
@@ -447,18 +453,20 @@ document.querySelectorAll('[data-carousel]').forEach((carousel) => {
   });
   let touchStart;
   track.addEventListener('touchstart', (event) => {
+    touching = true; schedule();
     touchStart = event.touches.length === 1 ? {x: event.touches[0].clientX, y: event.touches[0].clientY} : null;
   }, {passive: true});
   track.addEventListener('touchend', (event) => {
+    touching = false; schedule();
     if (!touchStart || !event.changedTouches.length) return;
     const dx = event.changedTouches[0].clientX - touchStart.x;
     const dy = event.changedTouches[0].clientY - touchStart.y;
     if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) navigate(current + (dx < 0 ? 1 : -1));
     touchStart = null;
   }, {passive: true});
-  track.addEventListener('touchcancel', () => { touchStart = null; }, {passive: true});
+  track.addEventListener('touchcancel', () => { touching = false; touchStart = null; schedule(); }, {passive: true});
   document.addEventListener('visibilitychange', schedule);
-  updatePause(); schedule();
+  schedule();
 });
 
 const themeForm = document.querySelector('#theme-form');
