@@ -31,6 +31,7 @@ from contract_pdf import build_contract_pdf
 
 ROOT = Path(__file__).parent
 TERMS_VERSION = CONTRACT_VERSION
+BANNER_MAX_BYTES = 900 * 1024
 PIX_KEY = "38145273000105"
 PIX_RECEIVER_NAME = "AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS"
 # O CEP não é exibido aqui porque não foi confirmado para o endereço de retirada.
@@ -40,7 +41,7 @@ PRIVACY_CONTACT = os.environ.get("PRIVACY_CONTACT", "(16) 98800-4966")
 ADDRESS = PICKUP_ADDRESS  # compatibilidade com comprovantes e integrações existentes
 CLIENT_COLUMNS = "id,public_id,name,cpf,phone,email,terms_version,terms_text,signature,accepted_at,active,session_version,residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement"
 PACKAGE_COLUMNS = "id,public_id,client_id,tracking,width,height,length,weight,shelf,category,base_price,status,created_at,notified_at,picked_at"
-PICKUP_COLUMNS = "id,receiver_name,receiver_document,document_type,signature,staff,picked_at,base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,discount_type,discount_input,discount_amount,original_total,final_total,discount_applied_by,surcharge_amount,surcharge_reason,surcharge_applied_by"
+PICKUP_COLUMNS = "id,receiver_name,receiver_document,document_type,signature,staff,picked_at,base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,discount_type,discount_input,discount_amount,original_total,final_total,discount_applied_by,surcharge_amount,surcharge_reason,surcharge_applied_by,pix_key_snapshot,pix_receiver_snapshot,pix_key_type_snapshot"
 PICKUP_PACKAGE_COLUMNS = "pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,tracking_code,package_category,notified_at,service_amount,late_days,total_amount"
 PACKAGE_COLUMNS_P = ",".join(f"p.{column}" for column in PACKAGE_COLUMNS.split(","))
 PICKUP_COLUMNS_PU = ",".join(f"pu.{column}" for column in PICKUP_COLUMNS.split(","))
@@ -54,8 +55,45 @@ def validated_image_type(data, maximum_bytes):
         with Image.open(BytesIO(data)) as image:
             image.verify()
             return {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}.get(image.format)
-    except (UnidentifiedImageError, OSError, ValueError):
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
         return None
+
+
+def validate_pix_settings(receiver, key_type, key):
+    import unicodedata
+    import uuid
+    normalized = unicodedata.normalize("NFKD", receiver).encode("ascii", "ignore").decode().strip()
+    if not normalized or len(receiver) > 180 or any(ord(c) < 32 for c in receiver):
+        raise ValueError("Informe um nome de titular válido com até 180 caracteres.")
+    if key_type in {"CPF", "CNPJ"}:
+        if not re.fullmatch(r"[0-9./\-]+", key):
+            raise ValueError("Informe uma chave CPF ou CNPJ válida.")
+        key = digits(key)
+        if key_type == "CPF" and not valid_cpf(key):
+            raise ValueError("CPF inválido.")
+        if key_type == "CNPJ":
+            if len(key) != 14 or len(set(key)) == 1:
+                raise ValueError("CNPJ inválido.")
+            for length in (12, 13):
+                weights = ([5,4,3,2,9,8,7,6,5,4,3,2] if length == 12 else [6,5,4,3,2,9,8,7,6,5,4,3,2])
+                remainder = sum(int(n)*w for n,w in zip(key[:length], weights)) % 11
+                if int(key[length]) != (0 if remainder < 2 else 11-remainder):
+                    raise ValueError("CNPJ inválido.")
+    elif key_type == "E-mail":
+        if not re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-]+@[A-Za-z0-9](?:[A-Za-z0-9.\-]*[A-Za-z0-9])?\.[A-Za-z]{2,}", key) or len(key) > 77:
+            raise ValueError("Informe um e-mail Pix válido com até 77 caracteres.")
+        key = key.lower()
+    elif key_type == "Telefone":
+        if not re.fullmatch(r"\+[1-9][0-9]{7,14}", key):
+            raise ValueError("Informe o telefone com +, código do país e DDD, sem espaços.")
+    elif key_type == "Aleatória":
+        try:
+            key = str(uuid.UUID(key))
+        except ValueError:
+            raise ValueError("Informe uma chave aleatória UUID válida.") from None
+    else:
+        raise ValueError("Selecione um tipo de chave Pix válido.")
+    return key
 
 
 def format_blog_body(value):
@@ -241,7 +279,7 @@ def create_app(test_config=None):
         try: theme_colors = json.loads(theme["colors"]) if theme else {}
         except (TypeError, json.JSONDecodeError): theme_colors = {}
         return {"csrf_token": session.get("csrf_token"), "address": PICKUP_ADDRESS,
-                "pickup_address": PICKUP_ADDRESS, "pix_receiver_name_full": PIX_RECEIVER_NAME,
+                "pickup_address": PICKUP_ADDRESS, "pix_receiver_name_full": db().execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1").fetchone()["pix_receiver_name"],
                 "logged_name": staff["name"] if staff else (app.config["STAFF_NAME"] if session.get("staff") else client_name),
                 "pickup_cep": PICKUP_CEP, "theme_colors": theme_colors, "staff_account": staff,
                 "staff_legacy": session.get("staff_legacy")}
@@ -336,14 +374,24 @@ def create_app(test_config=None):
             (like, like, phone_like),
         ).fetchall()
 
+    def configured_banners():
+        setting = db().execute("SELECT * FROM settings WHERE id=1").fetchone()
+        banners = [dict(row) for row in db().execute(
+            "SELECT id,alt_text,position,updated_at,active FROM site_banners ORDER BY position,id").fetchall()]
+        banners.append({"id": 0, "alt_text": setting["main_banner_alt"],
+                        "position": setting["main_banner_position"], "active": setting["main_banner_active"],
+                        "updated_at": setting["main_banner_updated_at"], "main": True})
+        for banner in banners:
+            banner["src"] = (url_for("main_service_banner") if banner["id"] == 0 else
+                             url_for("banner_image", banner_id=banner["id"]))
+        return sorted(banners, key=lambda banner: banner["position"])
+
     @app.get("/")
     def index():
-        banners = db().execute("SELECT id,alt_text,position,updated_at FROM site_banners ORDER BY position,id LIMIT 3").fetchall()
+        banners = [banner for banner in configured_banners() if banner["active"]]
         photos = db().execute("SELECT id,kind,alt_text,position,updated_at FROM site_photos ORDER BY position,id LIMIT 3").fetchall()
-        setting = db().execute("SELECT main_banner_updated_at FROM settings WHERE id=1").fetchone()
         show_registration = not (session.get("client_id") or session.get("staff")) or bool(session.get("staff") and request.args.get("cadastro") == "1")
-        return render_template("index.html", banners=banners, photos=photos, show_registration=show_registration,
-                               main_banner_version=setting["main_banner_updated_at"] if setting else "default")
+        return render_template("index.html", banners=banners, photos=photos, show_registration=show_registration)
 
     @app.get("/identidade/banner-principal")
     def main_service_banner():
@@ -429,7 +477,12 @@ def create_app(test_config=None):
     @admin_required
     def visual_identity():
         main_banner_page = request.endpoint == "main_banner_settings"
-        template = "main_banner_settings.html" if main_banner_page else "visual_identity.html"
+        staff = current_staff()
+        if (main_banner_page or request.form.get("action") in {"main_banner", "restore_main_banner"}) and staff and staff["role"] != "administrador":
+            abort(403)
+        if main_banner_page and request.method == "GET":
+            return redirect(url_for("banner_settings"))
+        template = "banner_settings.html" if main_banner_page else "visual_identity.html"
         if request.method == "POST":
             action = request.form.get("action", "main_banner" if main_banner_page else "header")
             if main_banner_page and (action not in {"main_banner", "restore_main_banner"} or request.form.get("restore")):
@@ -442,11 +495,11 @@ def create_app(test_config=None):
                 audit("restaurar_banner_principal", "configuracao", 1)
             elif action == "main_banner":
                 upload = request.files.get("main_banner_image")
-                data = upload.read(2 * 1024 * 1024 + 1) if upload else b""
-                mime = validated_image_type(data, 2 * 1024 * 1024)
-                if not data or len(data) > 2 * 1024 * 1024 or not mime:
-                    flash("Envie um banner PNG, JPG ou WebP de até 2 MB.", "error")
-                    return render_template(template, main_banner_version=now().timestamp()), 400
+                data = upload.read(BANNER_MAX_BYTES + 1) if upload else b""
+                mime = validated_image_type(data, BANNER_MAX_BYTES)
+                if not data or len(data) > BANNER_MAX_BYTES or not mime:
+                    flash("Envie um banner PNG, JPG ou WebP de até 900 KB. A imagem anterior foi preservada.", "error")
+                    return render_template("banner_settings.html", banners=configured_banners()), 400
                 db().execute(
                     "UPDATE settings SET main_banner_image=?,main_banner_mime=?,main_banner_updated_at=? WHERE id=1",
                     (data, mime, now().isoformat()),
@@ -463,7 +516,7 @@ def create_app(test_config=None):
                 audit("alterar_identidade_visual", "configuracao", 1)
             db().commit()
             flash("Identidade visual alterada com sucesso!", "success")
-            return redirect(url_for("main_banner_settings" if main_banner_page else "visual_identity"))
+            return redirect(url_for("banner_settings" if main_banner_page or action in {"main_banner", "restore_main_banner"} else "visual_identity"))
         setting = db().execute("SELECT main_banner_updated_at FROM settings WHERE id=1").fetchone()
         return render_template(template, main_banner_version=setting["main_banner_updated_at"] if setting else "default")
 
@@ -476,32 +529,64 @@ def create_app(test_config=None):
     @app.route("/painel/configuracoes/banners", methods=["GET", "POST"])
     @admin_required
     def banner_settings():
+        staff = current_staff()
+        if staff and staff["role"] != "administrador":
+            abort(403)
+        banners = configured_banners()
         if request.method == "POST":
-            action = request.form.get("action", "save")
-            try: banner_id = int(request.form.get("banner_id", "0"))
-            except ValueError: banner_id = 0
-            if action == "remove":
-                db().execute("DELETE FROM site_banners WHERE id=?", (banner_id,)); audit("remover_banner", "banner", banner_id); db().commit()
-                flash("Banner removido.", "success"); return redirect(url_for("banner_settings"))
-            try: position = int(request.form.get("position", "1"))
-            except ValueError: position = 0
+            try:
+                banner_id = int(request.form.get("banner_id", "-1"))
+                position = int(request.form.get("position", "1"))
+            except ValueError:
+                abort(400)
+            existing = next((b for b in banners if b["id"] == banner_id), None)
             alt_text = request.form.get("alt_text", "").strip()
-            upload = request.files.get("image"); data = upload.read(300 * 1024 + 1) if upload and upload.filename else b""
-            mime = validated_image_type(data, 300 * 1024) if data else None
-            existing = db().execute("SELECT id FROM site_banners WHERE id=?", (banner_id,)).fetchone() if banner_id else None
-            count = db().execute("SELECT COUNT(id) total FROM site_banners").fetchone()["total"]
-            if position not in (1,2,3) or not alt_text or (not existing and count >= 3) or (data and (len(data)>300*1024 or not mime)) or (not existing and not data):
-                flash("Informe descrição, posição de 1 a 3 e uma imagem PNG, JPG ou WebP de até 300 KB.", "error")
-                return redirect(url_for("banner_settings"))
-            conflict = db().execute("SELECT id FROM site_banners WHERE position=? AND id!=?", (position,banner_id)).fetchone()
+            active = int(request.form.get("active") == "yes")
+            upload = request.files.get("image")
+            has_upload = bool(upload and upload.filename)
+            data = upload.read(BANNER_MAX_BYTES + 1) if has_upload else b""
+            mime = validated_image_type(data, BANNER_MAX_BYTES) if has_upload else None
+            error = None
+            if has_upload and not mime:
+                error = "Imagem inválida. Envie PNG, JPG ou WebP de até 900 KB. A imagem anterior foi preservada."
+            elif not alt_text or len(alt_text) > 180 or not 1 <= position <= max(3, len(banners)):
+                error = "Informe uma descrição de até 180 caracteres e uma ordem válida."
+            elif not existing and (banner_id != -1 or len(banners) >= 3 or not has_upload):
+                error = "Selecione um banner existente ou envie uma imagem para uma das três posições."
+            elif active and sum(b["active"] for b in banners if b["id"] != banner_id) >= 3:
+                error = "Ative no máximo três banners. Desative outro antes de ativar este."
+            if error:
+                flash(error, "error")
+                return render_template("banner_settings.html", banners=banners), 400
+            # Troca de posições em uma transação, sem violar a chave única antiga.
+            db().begin_write()
+            conflict = next((b for b in banners if b["position"] == position and b["id"] != banner_id), None)
+            old_position = existing["position"] if existing else next(i for i in range(1, 5) if all(b["position"] != i for b in banners))
+            if existing and banner_id != 0:
+                db().execute("UPDATE site_banners SET position=0 WHERE id=?", (banner_id,))
             if conflict:
-                flash("A posição escolhida já está em uso.", "error"); return redirect(url_for("banner_settings"))
-            timestamp=now().isoformat()
-            if existing and data: db().execute("UPDATE site_banners SET image=?,mime_type=?,alt_text=?,position=?,updated_at=? WHERE id=?",(data,mime,alt_text,position,timestamp,banner_id))
-            elif existing: db().execute("UPDATE site_banners SET alt_text=?,position=?,updated_at=? WHERE id=?",(alt_text,position,timestamp,banner_id))
-            else: db().execute("INSERT INTO site_banners(image,mime_type,alt_text,position,updated_at) VALUES(?,?,?,?,?)",(data,mime,alt_text,position,timestamp))
-            audit("salvar_banner", "banner", banner_id or None, f"posição {position}"); db().commit(); flash("Banner salvo.","success"); return redirect(url_for("banner_settings"))
-        banners=db().execute("SELECT id,alt_text,position,updated_at FROM site_banners ORDER BY position").fetchall()
+                if conflict["id"] == 0:
+                    db().execute("UPDATE settings SET main_banner_position=? WHERE id=1", (old_position,))
+                else:
+                    db().execute("UPDATE site_banners SET position=? WHERE id=?", (old_position, conflict["id"]))
+            timestamp = now().isoformat()
+            if banner_id == 0:
+                db().execute("UPDATE settings SET main_banner_alt=?,main_banner_position=?,main_banner_active=?,main_banner_updated_at=? WHERE id=1",
+                             (alt_text, position, active, timestamp))
+                if has_upload:
+                    db().execute("UPDATE settings SET main_banner_image=?,main_banner_mime=? WHERE id=1", (data, mime))
+            elif existing:
+                db().execute("UPDATE site_banners SET alt_text=?,position=?,active=?,updated_at=? WHERE id=?",
+                             (alt_text, position, active, timestamp, banner_id))
+                if has_upload:
+                    db().execute("UPDATE site_banners SET image=?,mime_type=? WHERE id=?", (data, mime, banner_id))
+            else:
+                db().execute("INSERT INTO site_banners(image,mime_type,alt_text,position,active,updated_at) VALUES(?,?,?,?,?,?)",
+                             (data, mime, alt_text, position, active, timestamp))
+            audit("salvar_banner", "banner", banner_id, f"posição {position}; ativo {active}")
+            db().commit()
+            flash("Banner salvo.", "success")
+            return redirect(url_for("banner_settings"))
         return render_template("banner_settings.html", banners=banners)
 
     @app.get("/fotos/<int:photo_id>/imagem")
@@ -1098,7 +1183,7 @@ def create_app(test_config=None):
         if not pickup:
             abort(404)
         packages = db().execute("SELECT p.id package_id,p.public_id,pp.base_amount,pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=? AND p.client_id=?", (pickup_id, session["client_id"])).fetchall()
-        return render_template("receipt.html", pickup=pickup, packages=packages, pix=PIX_KEY, client_copy=True)
+        return render_template("receipt.html", pickup=pickup, packages=packages, pix=pickup["pix_key_snapshot"] or PIX_KEY, client_copy=True)
 
     @app.post("/sair")
     def logout():
@@ -1134,8 +1219,8 @@ def create_app(test_config=None):
             elif 5 <= day <= 10: alerts["late"].append(item)
             elif day >= 11: alerts["expired"].append(item)
         package_form = session.pop("package_form", {})
-        settings = db().execute("SELECT pix_receiver_name FROM settings WHERE id=1").fetchone()
-        return render_template("dashboard.html", clients=clients, packages=rows, alerts=alerts, q=query, pix=PIX_KEY, package_form=package_form, pix_receiver_name=settings["pix_receiver_name"], page=page, has_next=has_next)
+        settings = db().execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1").fetchone()
+        return render_template("dashboard.html", clients=clients, packages=rows, alerts=alerts, q=query, pix=settings["pix_key"], pix_key_type=settings["pix_key_type"], package_form=package_form, pix_receiver_name=settings["pix_receiver_name"], page=page, has_next=has_next)
 
     @app.get("/painel/clientes/busca")
     @login_required
@@ -1243,16 +1328,30 @@ def create_app(test_config=None):
                         for row in records]
         return render_template("notification_settings.html", status=notification_config_status(), records=safe_records)
 
-    @app.route("/painel/configuracoes/pix", methods=["GET","POST"])
+    @app.route("/painel/configuracoes/pix", methods=["GET", "POST"])
     @admin_required
     def pix_settings():
-        if request.method == "GET":
-            return render_template("pix_settings.html", receiver=PIX_RECEIVER_NAME, pix=PIX_KEY)
-        db().execute("UPDATE settings SET pix_receiver_name=? WHERE id=1", (PIX_RECEIVER_NAME,))
-        audit("configurar_pix", "configuracao", 1, "nome do recebedor atualizado")
-        db().commit()
-        flash("Configuração Pix atualizada.", "success")
-        return redirect(url_for("pix_settings"))
+        staff = current_staff()
+        if staff and staff["role"] != "administrador":
+            abort(403)
+        setting = dict(db().execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1").fetchone())
+        editing = request.args.get("editar") == "1" or request.method == "POST"
+        if request.method == "POST":
+            setting = {"pix_receiver_name": request.form.get("receiver", "").strip(),
+                       "pix_key": request.form.get("pix_key", "").strip(),
+                       "pix_key_type": request.form.get("pix_key_type", "")}
+            try:
+                setting["pix_key"] = validate_pix_settings(setting["pix_receiver_name"], setting["pix_key_type"], setting["pix_key"])
+            except ValueError as error:
+                flash(str(error), "error")
+                return render_template("pix_settings.html", setting=setting, editing=True), 400
+            db().execute("UPDATE settings SET pix_receiver_name=?,pix_key=?,pix_key_type=? WHERE id=1",
+                         (setting["pix_receiver_name"], setting["pix_key"], setting["pix_key_type"]))
+            audit("configurar_pix", "configuracao", 1, "dados do Pix atualizados")
+            db().commit()
+            flash("Dados do Pix atualizados com sucesso!", "success")
+            return redirect(url_for("pix_settings"))
+        return render_template("pix_settings.html", setting=setting, editing=editing)
 
     @app.get("/painel/pacotes/<int:package_id>")
     @login_required
@@ -1442,9 +1541,9 @@ def create_app(test_config=None):
             final_total = (discounted_total + surcharge_amount).quantize(Decimal("0.01"))
         except ValueError as error:
             return {"error": str(error)}, 400
-        setting = db().execute("SELECT pix_receiver_name FROM settings WHERE id=1").fetchone()
+        setting = db().execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1").fetchone()
         receiver = setting["pix_receiver_name"]
-        payload = pix_payload(PIX_KEY, receiver, float(final_total)) if receiver and final_total > 0 else None
+        payload = pix_payload(setting["pix_key"], receiver, float(final_total)) if receiver and final_total > 0 else None
         qr_data = qr_code_data_url(payload) if payload else None
         return {"total": float(final_total), "package_total": package_total, "surcharge_amount": float(surcharge_amount),
             "original_total": float(original_total), "discount_amount": float(discount_amount),
@@ -1515,10 +1614,11 @@ def create_app(test_config=None):
                 flash(str(error), "error")
                 return redirect(url_for("dashboard"))
             picked_at = now().isoformat()
-            if payment_method == "Pix" and not connection.execute("SELECT pix_receiver_name FROM settings WHERE id=1 AND pix_receiver_name IS NOT NULL AND trim(pix_receiver_name)!=''").fetchone():
+            if payment_method == "Pix" and not connection.execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1 AND pix_receiver_name IS NOT NULL AND trim(pix_receiver_name)!=''").fetchone():
                 connection.rollback()
                 flash("Configure o nome do recebedor Pix antes de confirmar um pagamento Pix.", "error")
                 return redirect(url_for("dashboard"))
+            pix_setting = connection.execute("SELECT pix_key,pix_receiver_name,pix_key_type FROM settings WHERE id=1").fetchone()
             cur = connection.execute("""INSERT INTO pickups(receiver_name,receiver_document,document_type,signature,staff,picked_at,
                 base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,
                 discount_type,discount_input,discount_amount,original_total,final_total,discount_applied_by,
@@ -1529,6 +1629,9 @@ def create_app(test_config=None):
                  discount_type, float(discount_input) if discount_input is not None else None, float(discount_amount),
                  float(original_total), float(final_total), session["staff"], float(surcharge_amount), surcharge_reason, session["staff"]))
             pickup_id = cur.fetchone()["id"]
+            if payment_method == "Pix":
+                connection.execute("UPDATE pickups SET pix_key_snapshot=?,pix_receiver_snapshot=?,pix_key_type_snapshot=? WHERE id=?",
+                    (pix_setting["pix_key"],pix_setting["pix_receiver_name"],pix_setting["pix_key_type"],pickup_id))
             for package, total in zip(packages, totals):
                 owner = connection.execute("SELECT id,name,public_id FROM clients WHERE id=?", (package["client_id"],)).fetchone()
                 connection.execute("""INSERT INTO pickup_packages(
@@ -1644,7 +1747,7 @@ def init_db(database):
     ensure_columns(connection, "pickups", {"payment_method": "TEXT", "document_type": "TEXT", "payment_confirmed_at": "TEXT", "payment_confirmed_by": "TEXT",
         "discount_type": "TEXT", "discount_input": "REAL", "discount_amount": "REAL", "original_total": "REAL",
         "final_total": "REAL", "discount_applied_by": "TEXT", "surcharge_amount": "REAL", "surcharge_reason": "TEXT",
-        "surcharge_applied_by": "TEXT"})
+        "surcharge_applied_by": "TEXT", "pix_key_snapshot": "TEXT", "pix_receiver_snapshot": "TEXT", "pix_key_type_snapshot": "TEXT"})
     ensure_columns(connection, "pickup_packages", {
         "package_public_id": "TEXT", "client_id": "INTEGER", "client_name": "TEXT", "client_public_id": "TEXT",
         "tracking_code": "TEXT", "package_category": "TEXT", "notified_at": "TEXT",
@@ -1695,8 +1798,21 @@ def init_db(database):
         prefix=role_prefix.get(staff["role"],"ATEPCA")
         connection.execute("UPDATE staff_users SET public_id=? WHERE id=?",(next_public_code(connection,prefix),staff["id"]))
     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_staff_users_public_id ON staff_users(public_id)")
-    # O nome completo é mostrado na interface; pix_payload aplica o limite EMV de 25 caracteres.
-    connection.execute("UPDATE settings SET pix_receiver_name=? WHERE id=1", (PIX_RECEIVER_NAME,))
+    ensure_columns(connection, "settings", {"pix_key": "TEXT", "pix_key_type": "TEXT"})
+    connection.execute("UPDATE settings SET pix_key=? WHERE pix_key IS NULL", (PIX_KEY,))
+    connection.execute("UPDATE settings SET pix_key_type='CNPJ' WHERE pix_key_type IS NULL")
+    # Snapshot dos comprovantes anteriores antes de permitir a primeira edição.
+    connection.execute("UPDATE pickups SET pix_key_snapshot=?,pix_receiver_snapshot=?,pix_key_type_snapshot='CNPJ' WHERE payment_method='Pix' AND pix_key_snapshot IS NULL",
+                       (PIX_KEY, PIX_RECEIVER_NAME))
+    if "main_banner_position" not in table_columns(connection, "settings"):
+        ensure_columns(connection, "settings", {"main_banner_position": "INTEGER NOT NULL DEFAULT 1",
+            "main_banner_active": "INTEGER NOT NULL DEFAULT 1", "main_banner_alt": "TEXT NOT NULL DEFAULT 'ME GUARDE'"})
+        connection.execute("UPDATE settings SET main_banner_alt=? WHERE id=1", ("ME GUARDE — COMPROU? DEIXA COM A GENTE.",))
+        connection.execute("UPDATE site_banners SET position=-position")
+        connection.execute("UPDATE site_banners SET position=1-position")
+    if "active" not in table_columns(connection, "site_banners"):
+        ensure_columns(connection, "site_banners", {"active": "INTEGER NOT NULL DEFAULT 1"})
+        connection.execute("UPDATE site_banners SET active=0 WHERE position>3")
     connection.commit()
     connection.close()
 

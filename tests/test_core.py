@@ -92,3 +92,14 @@ def test_pix_payload_has_key_amount_and_valid_crc():
     assert "540515.50" in payload
     assert payload[-8:-4] == "6304"
     assert len(payload[-4:]) == 4
+
+
+def test_pix_enforces_merchant_byte_limit_and_crc():
+    import binascii
+    payload = pix_payload('a' * 77, 'Titular', 4.9)
+    assert '2699' in payload
+    assert payload[-4:] == f'{binascii.crc_hqx(payload[:-4].encode(), 0xFFFF):04X}'
+    with pytest.raises(ValueError):
+        pix_payload('a' * 78, 'Titular', 4.9)
+    with pytest.raises(ValueError):
+        pix_payload('não-ascii', 'Titular', 4.9)

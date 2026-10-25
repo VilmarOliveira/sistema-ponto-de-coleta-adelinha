@@ -46,7 +46,7 @@ def test_banner_upload_home_display_and_persistence(tmp_path):
     Image.new("RGB", (24, 24), "orange").save(output, "WEBP")
     image = output.getvalue()
     response = client.post("/painel/configuracoes/banners", data={
-        "position": "1", "alt_text": "Cliente recebendo uma encomenda",
+        "position": "1", "active": "yes", "alt_text": "Cliente recebendo uma encomenda",
         "image": (io.BytesIO(image), "banner.webp"), "csrf_token": csrf(client),
     }, content_type="multipart/form-data", follow_redirects=True)
     assert response.status_code == 200 and "Banner salvo" in response.text
@@ -57,7 +57,7 @@ def test_banner_upload_home_display_and_persistence(tmp_path):
     assert restarted.get("/banners/1/imagem").data == image
 
 
-def test_main_banner_upload_is_separate_and_persists(tmp_path):
+def test_legacy_main_banner_upload_persists_in_unified_carousel(tmp_path):
     database = str(tmp_path / "app.db")
     app = create_app({"TESTING": True, "SECRET_KEY": "test", "DATABASE": database})
     client = app.test_client(); legacy_login(client)

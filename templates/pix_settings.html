@@ -1,1 +1,11 @@
-{% extends 'base.html' %}{% from 'icons.html' import icon %}{% block title %}Pix · Configurações{% endblock %}{% block content %}<section class="panel-card"><h1>Configuração do Pix</h1><p><b>Titular:</b> {{ receiver }}</p><p><b>Chave CNPJ:</b> {{ pix }}</p><p class="muted">Os dados são preservados no sistema e o recebimento continua sujeito à conferência manual.</p><form method="post"><button class="button primary">Confirmar configuração</button></form><a class="button ghost bottom-back" href="{{ url_for('settings_hub') }}">{{ icon('back') }} Voltar às Configurações</a></section>{% endblock %}
+{% extends 'base.html' %}{% from 'icons.html' import icon %}{% block title %}Pix · Configurações{% endblock %}{% block content %}
+<section class="panel-card"><h1>Configuração do Pix</h1>
+{% if editing %}<h2>Editar dados do Pix</h2><form method="post" action="{{ url_for('pix_settings') }}">
+<label>Nome do titular<input name="receiver" value="{{ setting.pix_receiver_name }}" required maxlength="180"></label>
+<label>Tipo de chave Pix<select name="pix_key_type" required>{% for kind in ['CPF','CNPJ','E-mail','Telefone','Aleatória'] %}<option value="{{ kind }}" {% if kind == setting.pix_key_type %}selected{% endif %}>{{ kind }}</option>{% endfor %}</select></label>
+<label>Chave Pix<input name="pix_key" value="{{ setting.pix_key }}" required maxlength="77" aria-describedby="pix-help"></label><p id="pix-help" class="muted">Telefone: +, código do país e DDD, sem espaços. Chave aleatória: UUID. O nome é ajustado ao limite de 25 caracteres no código Pix.</p>
+<button class="button primary">{{ icon('save') }} Salvar alterações</button><a class="button ghost" href="{{ url_for('pix_settings') }}">Cancelar</a></form>
+{% else %}<p><b>Titular:</b> {{ setting.pix_receiver_name }}</p><p><b>Tipo de chave Pix:</b> {{ setting.pix_key_type }}</p><p><b>Chave Pix:</b> {{ setting.pix_key }}</p>
+<p class="muted">As alterações serão usadas nas próximas cobranças. Os comprovantes anteriores permanecem preservados. O recebimento continua sujeito à conferência manual.</p>
+<a class="button primary" href="{{ url_for('pix_settings',editar=1) }}">{{ icon('edit') }} Editar dados do Pix</a>{% endif %}
+<a class="button ghost bottom-back" href="{{ url_for('settings_hub') }}">{{ icon('back') }} Voltar às Configurações</a></section>{% endblock %}
