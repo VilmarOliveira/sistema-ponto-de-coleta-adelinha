@@ -58,7 +58,9 @@ def test_banner_order_activation_single_and_restart(configured):
     assert home.count('data-carousel role=') == 1
     assert home.index('alt="Terceira primeiro"') < home.index('alt="ME GUARDE')
     assert home.count(' data-slide aria-hidden=') == 3
-    assert 'data-carousel-next' in home
+    assert 'data-slide-to="0"' in home
+    assert 'data-carousel-next' not in home and 'data-carousel-prev' not in home
+    assert 'data-carousel-pause' not in home
     for banner_id, position in ((1, '2'), (2, '1')):
         assert save_banner(client, banner_id, position=position, active='no').status_code == 200
     restarted = create_app({'TESTING': True, 'SECRET_KEY': 'test', 'DATABASE': database}).test_client()
