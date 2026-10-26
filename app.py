@@ -19,6 +19,8 @@ import qrcode
 from PIL import Image, UnidentifiedImageError
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from branding import BRAND_VERSION, ORIGINAL_LOGO, DEFAULT_THEME, default_stylesheet, theme_variables
+
 from core import (
     TZ, calculate_discount, calculate_fees, classify_package, package_arrival_message,
     pix_payload, valid_cpf, validate_surcharge,
@@ -39,9 +41,9 @@ PICKUP_ADDRESS = "RUA AFONSO BORGES DE FREITAS, 795, JARDIM ADELINHA, FRANCA –
 PICKUP_CEP = os.environ.get("PICKUP_CEP", "14406-848")
 PRIVACY_CONTACT = os.environ.get("PRIVACY_CONTACT", "(16) 98800-4966")
 ADDRESS = PICKUP_ADDRESS  # compatibilidade com comprovantes e integrações existentes
-CLIENT_COLUMNS = "id,public_id,name,cpf,phone,email,terms_version,terms_text,signature,accepted_at,active,session_version,residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,legacy_public_id,contract_public_id"
+CLIENT_COLUMNS = "id,public_id,name,cpf,phone,email,terms_version,terms_text,signature,accepted_at,active,session_version,residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,legacy_public_id,contract_public_id,document_brand_version,document_logo_present"
 PACKAGE_COLUMNS = "id,public_id,client_id,tracking,width,height,length,weight,shelf,category,base_price,status,created_at,notified_at,picked_at"
-PICKUP_COLUMNS = "id,receiver_name,receiver_document,document_type,signature,staff,picked_at,base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,discount_type,discount_input,discount_amount,original_total,final_total,discount_applied_by,surcharge_amount,surcharge_reason,surcharge_applied_by,pix_key_snapshot,pix_receiver_snapshot,pix_key_type_snapshot"
+PICKUP_COLUMNS = "id,receiver_name,receiver_document,document_type,signature,staff,picked_at,base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,discount_type,discount_input,discount_amount,original_total,final_total,discount_applied_by,surcharge_amount,surcharge_reason,surcharge_applied_by,pix_key_snapshot,pix_receiver_snapshot,pix_key_type_snapshot,document_brand_version,document_logo_present"
 PICKUP_PACKAGE_COLUMNS = "pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,tracking_code,package_category,notified_at,service_amount,late_days,total_amount"
 PACKAGE_COLUMNS_P = ",".join(f"p.{column}" for column in PACKAGE_COLUMNS.split(","))
 PICKUP_COLUMNS_PU = ",".join(f"pu.{column}" for column in PICKUP_COLUMNS.split(","))
@@ -274,14 +276,15 @@ def create_app(test_config=None):
             row = db().execute("SELECT name FROM clients WHERE id=?", (session["client_id"],)).fetchone()
             client_name = row["name"] if row else None
         staff = current_staff() if session.get("staff_user_id") else None
-        setting = db().execute("SELECT active_theme_id FROM settings WHERE id=1").fetchone()
+        setting = db().execute("SELECT active_theme_id,CASE WHEN header_image IS NOT NULL THEN 1 ELSE 0 END header_customized FROM settings WHERE id=1").fetchone()
         theme = db().execute("SELECT colors FROM site_themes WHERE id=?", (setting["active_theme_id"],)).fetchone() if setting and setting["active_theme_id"] else None
         try: theme_colors = json.loads(theme["colors"]) if theme else {}
         except (TypeError, json.JSONDecodeError): theme_colors = {}
         return {"csrf_token": session.get("csrf_token"), "address": PICKUP_ADDRESS,
                 "pickup_address": PICKUP_ADDRESS, "pix_receiver_name_full": db().execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1").fetchone()["pix_receiver_name"],
                 "logged_name": staff["name"] if staff else (app.config["STAFF_NAME"] if session.get("staff") else client_name),
-                "pickup_cep": PICKUP_CEP, "theme_colors": theme_colors, "staff_account": staff,
+                "pickup_cep": PICKUP_CEP, "theme_colors": theme_colors, "theme_variables": theme_variables(theme_colors),
+                "original_logo_available": ORIGINAL_LOGO.is_file(), "header_customized": bool(setting and setting["header_customized"]), "staff_account": staff,
                 "staff_legacy": session.get("staff_legacy")}
 
     @app.template_filter("local_datetime")
@@ -405,7 +408,7 @@ def create_app(test_config=None):
                 mimetype=setting["main_banner_mime"],
                 headers={"Cache-Control": "public,max-age=3600"},
             )
-        return redirect(url_for("static", filename="me-guarde-banner.webp", v="original-2026-10"))
+        return redirect(url_for("static", filename="brand/adelinha-2026/me-guarde-banner.webp", v=BRAND_VERSION))
 
     @app.post("/metricas/evento")
     def analytics_event():
@@ -463,12 +466,18 @@ def create_app(test_config=None):
     def faq():
         return render_template("faq.html")
 
+    @app.get("/identidade/paleta.css")
+    def brand_stylesheet():
+        return Response(default_stylesheet(), mimetype="text/css", headers={"Cache-Control": "public,max-age=3600"})
+
     @app.get("/identidade/cabecalho")
     def header_identity():
         setting = db().execute("SELECT header_image,header_image_mime FROM settings WHERE id=1").fetchone()
         if setting and setting["header_image"]:
             return Response(bytes(setting["header_image"]), mimetype=setting["header_image_mime"],
                             headers={"Cache-Control": "no-store, max-age=0"})
+        if ORIGINAL_LOGO.is_file():
+            return send_file(ORIGINAL_LOGO, mimetype="image/png", max_age=0)
         response = redirect(url_for("static", filename="logo-adelinha.svg", v="default-1"))
         response.headers["Cache-Control"] = "no-store, max-age=0"
         return response
@@ -623,7 +632,7 @@ def create_app(test_config=None):
     @app.route("/painel/configuracoes/aparencia", methods=["GET", "POST"])
     @admin_required
     def appearance_settings():
-        defaults={"primary":"#ff4b16","secondary":"#7f4fba","page":"#f6f4f8","surface":"#ffffff","text":"#142441","link":"#7142a8","border":"#e2dce9","header":"#ffffff","footer":"#142441","button":"#ff4b16","button_hover":"#d9360b"}
+        defaults = dict(DEFAULT_THEME)
         if request.method == "POST":
             action=request.form.get("action")
             if action == "restore":
@@ -947,8 +956,8 @@ def create_app(test_config=None):
         )
         client_id = cur.fetchone()["id"]
         integrity = hashlib.sha256((public_id + name + cpf + terms_text() + signature + accepted_at).encode()).hexdigest()
-        db().execute("UPDATE clients SET contract_id=?,contract_hash=?,contract_public_id=?,confirmation_channel=?,confirmation_destination=?,confirmation_validated_at=?,accept_ip=?,accept_user_agent=? WHERE id=?",
-            (f"CTRPCA-{client_id}", integrity, public_id, confirmation.get("channel") if confirmation else "teste",
+        db().execute("UPDATE clients SET contract_id=?,contract_hash=?,contract_public_id=?,document_brand_version=?,document_logo_present=?,confirmation_channel=?,confirmation_destination=?,confirmation_validated_at=?,accept_ip=?,accept_user_agent=? WHERE id=?",
+            (f"CTRPCA-{client_id}", integrity, public_id, BRAND_VERSION, int(ORIGINAL_LOGO.is_file()), confirmation.get("channel") if confirmation else "teste",
              confirmation.get("destination") if confirmation else None, accepted_at,
              request.headers.get("X-Forwarded-For", request.remote_addr), request.headers.get("User-Agent", "")[:500], client_id))
         db().commit()
@@ -1631,6 +1640,7 @@ def create_app(test_config=None):
                  discount_type, float(discount_input) if discount_input is not None else None, float(discount_amount),
                  float(original_total), float(final_total), session["staff"], float(surcharge_amount), surcharge_reason, session["staff"]))
             pickup_id = cur.fetchone()["id"]
+            connection.execute("UPDATE pickups SET document_brand_version=?,document_logo_present=? WHERE id=?", (BRAND_VERSION, int(ORIGINAL_LOGO.is_file()), pickup_id))
             if payment_method == "Pix":
                 connection.execute("UPDATE pickups SET pix_key_snapshot=?,pix_receiver_snapshot=?,pix_key_type_snapshot=? WHERE id=?",
                     (pix_setting["pix_key"],pix_setting["pix_receiver_name"],pix_setting["pix_key_type"],pickup_id))
@@ -1774,11 +1784,11 @@ def init_db(database):
         "residential_complement": "TEXT", "email": "TEXT", "contract_id": "TEXT", "contract_hash": "TEXT",
         "confirmation_channel": "TEXT", "confirmation_destination": "TEXT", "confirmation_validated_at": "TEXT",
         "accept_ip": "TEXT", "accept_user_agent": "TEXT",
-        "legacy_public_id": "TEXT", "contract_public_id": "TEXT"})
+        "legacy_public_id": "TEXT", "contract_public_id": "TEXT", "document_brand_version": "TEXT", "document_logo_present": "INTEGER NOT NULL DEFAULT 0"})
     ensure_columns(connection, "pickups", {"payment_method": "TEXT", "document_type": "TEXT", "payment_confirmed_at": "TEXT", "payment_confirmed_by": "TEXT",
         "discount_type": "TEXT", "discount_input": "REAL", "discount_amount": "REAL", "original_total": "REAL",
         "final_total": "REAL", "discount_applied_by": "TEXT", "surcharge_amount": "REAL", "surcharge_reason": "TEXT",
-        "surcharge_applied_by": "TEXT", "pix_key_snapshot": "TEXT", "pix_receiver_snapshot": "TEXT", "pix_key_type_snapshot": "TEXT"})
+        "surcharge_applied_by": "TEXT", "pix_key_snapshot": "TEXT", "pix_receiver_snapshot": "TEXT", "pix_key_type_snapshot": "TEXT", "document_brand_version": "TEXT", "document_logo_present": "INTEGER NOT NULL DEFAULT 0"})
     ensure_columns(connection, "pickup_packages", {
         "package_public_id": "TEXT", "client_id": "INTEGER", "client_name": "TEXT", "client_public_id": "TEXT",
         "tracking_code": "TEXT", "package_category": "TEXT", "notified_at": "TEXT",
