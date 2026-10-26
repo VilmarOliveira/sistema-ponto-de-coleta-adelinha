@@ -221,7 +221,7 @@ A inicialização acrescenta, sem apagar tabelas, os campos de cliente ativo e v
 
 ## Regras implementadas
 
-- IDs novos de cliente `CLTPCA-1` e pacote `PCTPCA-1`, mantendo o reconhecimento dos códigos históricos.
+- IDs de cliente `CLIPCA-1` e pacote `PCTPCA-1`. Na primeira inicialização, códigos `CLTPCA` são atualizados para `CLIPCA`, mantendo o número quando disponível e a busca pelo código antigo. A sequência continua sem reutilizar números já emitidos; contratos e comprovantes históricos mantêm o código original.
 - CPF aceito com ou sem pontuação, validado pelos dígitos verificadores e bloqueado quando já pertence a outro cadastro.
 - Aceite guarda versão, assinatura e data/hora em `America/Sao_Paulo`.
 - Pequeno: soma ≤ 80 cm **e** peso ≤ 10 kg; grande: soma ≤ 150 cm **e** peso ≤ 20 kg; acima disso é recusado.

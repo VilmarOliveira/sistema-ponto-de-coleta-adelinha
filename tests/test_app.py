@@ -125,7 +125,7 @@ def login(client):
 def test_public_registration_generates_id_and_keeps_sensitive_data_private(client):
     response = register(client)
     assert response.status_code == 200
-    assert b"CLTPCA-1" in response.data
+    assert b"CLIPCA-1" in response.data
     assert b"52998224725" not in response.data
 
 
@@ -139,12 +139,12 @@ def test_package_form_search_select_and_register_flow(app, client):
     register(client, "Maria da Silva")
     login(client)
 
-    for query in ("Maria", "da Silva", "CLTPCA-1", "(16) 99999-9999"):
+    for query in ("Maria", "da Silva", "CLIPCA-1", "(16) 99999-9999"):
         response = client.get("/painel/clientes/busca", query_string={"q": query})
         assert response.status_code == 200
         assert response.json["clients"][0]["id"] == 1
         assert response.json["clients"][0]["name"] == "Maria da Silva"
-        assert response.json["clients"][0]["public_id"] == "CLTPCA-1"
+        assert response.json["clients"][0]["public_id"] == "CLIPCA-1"
 
     selected_id = client.get("/painel/clientes/busca", query_string={"q": "Maria"}).json["clients"][0]["id"]
     response = client.post("/pacotes", data={
@@ -346,7 +346,7 @@ def test_csrf_is_required(client):
 def test_package_error_preserves_form_and_edit_is_blocked_after_notice(app, client):
     register(client)
     login(client)
-    invalid = {"client_id": 1, "client_label": "Cliente Teste · CLTPCA-1", "tracking": "000123", "shelf": "A01",
+    invalid = {"client_id": 1, "client_label": "Cliente Teste · CLIPCA-1", "tracking": "000123", "shelf": "A01",
         "width": "100", "height": "40", "length": "20", "weight": "2", "csrf_token": token(client)}
     response = client.post("/pacotes", data=invalid, follow_redirects=True)
     assert "Pacote recusado: Limite de 150 cm na soma e 20 kg." in response.text
@@ -366,7 +366,7 @@ def test_admin_edits_client_changes_password_and_deactivates_with_history(app, c
     response = client.post("/painel/clientes/1/editar", data={"name": "Nome Atualizado", "cpf": "529.982.247-25", "phone": "16988887777", "residential_cep": "14400000", "residential_street": "Rua da Cliente", "residential_number": "123", "residential_district": "Centro", "residential_city": "Franca", "residential_state": "SP", "csrf_token": token(client)}, follow_redirects=True)
     assert "Cadastro atualizado" in response.text
     client.post("/painel/clientes/1/senha", data={"password": "senha-nova", "password_confirm": "senha-nova", "csrf_token": token(client)})
-    response = client.post("/painel/clientes/1/remover", data={"confirmation": "CLTPCA-1", "csrf_token": token(client)}, follow_redirects=True)
+    response = client.post("/painel/clientes/1/remover", data={"confirmation": "CLIPCA-1", "csrf_token": token(client)}, follow_redirects=True)
     assert "Cliente desativado" in response.text
     connection = sqlite3.connect(app.config["DATABASE"])
     assert connection.execute("SELECT name,active,session_version FROM clients").fetchone() == ("Nome Atualizado", 0, 3)
@@ -621,7 +621,7 @@ def test_withdrawal_snapshot_detail_restart_and_pdf(app, client, receiver, docum
     connection = sqlite3.connect(app.config["DATABASE"])
     snapshot = connection.execute("""SELECT package_public_id,client_id,client_name,client_public_id,service_amount,
         late_days,late_amount,total_amount FROM pickup_packages""").fetchone()
-    assert snapshot == ("PCTPCA-1", 1, "Cliente Teste", "CLTPCA-1", 4.9, 0, 0, 4.9)
+    assert snapshot == ("PCTPCA-1", 1, "Cliente Teste", "CLIPCA-1", 4.9, 0, 0, 4.9)
     connection.execute("UPDATE clients SET name='Nome alterado' WHERE id=1")
     connection.execute("UPDATE packages SET base_price=99 WHERE id=1")
     connection.commit()
