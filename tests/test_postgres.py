@@ -58,3 +58,29 @@ def test_banner_and_pix_settings_persist_on_postgresql():
     row = connection.execute('SELECT pix_key,pix_receiver_name FROM settings WHERE id=1').fetchone()
     assert row == {'pix_key': 'postgres@example.com', 'pix_receiver_name': 'Titular PostgreSQL'}
     connection.close()
+
+
+@pytest.mark.skipif(not os.environ.get('TEST_DATABASE_URL'), reason='TEST_DATABASE_URL não configurada')
+def test_client_prefix_migration_on_postgresql():
+    from app import next_public_code
+
+    database_url = os.environ['TEST_DATABASE_URL']
+    config = {'TESTING': True, 'SECRET_KEY': 'postgres-codes', 'DATABASE': database_url}
+    create_app(config)
+    connection = DatabaseConnection(database_url)
+    rows = connection.execute("SELECT last_value FROM id_sequences WHERE prefix IN ('CLTPCA','CLIPCA')").fetchall()
+    number = max((row['last_value'] for row in rows), default=0) + 10
+    old_code, new_code = f'CLTPCA-{number}', f'CLIPCA-{number}'
+    client_id = connection.execute('''INSERT INTO clients(public_id,name,cpf,phone,terms_version,signature,accepted_at,contract_hash)
+        VALUES(?,?,?,?,?,?,?,?) RETURNING id''',
+        (old_code, 'Cliente migração', '00000000000', '16999999999', 'v1', 'assinatura', '2026-01-01', 'hash-original')).fetchone()['id']
+    connection.commit()
+    connection.close()
+    create_app(config)
+    connection = DatabaseConnection(database_url)
+    row = connection.execute('SELECT public_id,legacy_public_id,contract_public_id,contract_hash FROM clients WHERE id=?', (client_id,)).fetchone()
+    assert row == {'public_id': new_code, 'legacy_public_id': old_code,
+                   'contract_public_id': old_code, 'contract_hash': 'hash-original'}
+    assert next_public_code(connection, 'CLIPCA') == f'CLIPCA-{number+1}'
+    connection.rollback()
+    connection.close()

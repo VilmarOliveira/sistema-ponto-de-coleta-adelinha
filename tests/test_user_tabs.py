@@ -34,7 +34,7 @@ def test_tabs_separate_accounts_and_search_by_email_id_and_role(users_app):
     assert 'Adicionar membro da equipe' in team and 'Adicionar cliente' not in team
     for query in ('gerente@example.com', 'GERPCA-1', 'gerente'):
         assert 'Gerente Exclusivo' in client.get('/painel/configuracoes/usuarios', query_string={'tab': 'equipe', 'q_team': query, 'q_clients': 'ausente'}).text
-    for query in ('cliente@example.com', 'CLTPCA-1'):
+    for query in ('cliente@example.com', 'CLIPCA-1'):
         assert 'Cliente Exclusivo' in client.get('/painel/configuracoes/usuarios', query_string={'q_clients': query, 'q_team': 'ausente'}).text
     assert 'Nenhum membro da equipe encontrado' in client.get('/painel/configuracoes/usuarios?tab=equipe&q_team=ausente').text
     assert 'Nenhum cliente encontrado' in client.get('/painel/configuracoes/usuarios?q_clients=ausente').text
@@ -50,7 +50,7 @@ def test_actions_keep_team_tab_search_and_existing_codes(users_app):
     assert 'Gerente Exclusivo' in page and 'Desativado' in page
     with sqlite3.connect(app.config['DATABASE']) as db:
         assert db.execute('SELECT public_id,active FROM staff_users').fetchone() == ('GERPCA-1', 0)
-        assert db.execute('SELECT public_id FROM clients').fetchone() == ('CLTPCA-1',)
+        assert db.execute('SELECT public_id FROM clients').fetchone() == ('CLIPCA-1',)
 
 
 @pytest.mark.parametrize('role', ['gerente', 'atendente'])

@@ -13,7 +13,9 @@ def build_contract_pdf(client):
             if y<60: pdf.showPage(); y=height-45
             pdf.setFont('Helvetica-Bold' if bold else 'Helvetica',9); pdf.drawString(45,y,wrapped); y-=12
     line('PONTO DE COLETA ADELINHA — CONTRATO ASSINADO',True)
-    line(f"Contratante: {client['name']} | CPF: {client['cpf']} | Código: {client['public_id']}")
+    code = client["contract_public_id"] if "contract_public_id" in client.keys() else None
+    code = code or client["public_id"]
+    line(f"Contratante: {client['name']} | CPF: {client['cpf']} | Código: {code}")
     line(f"Versão: {client['terms_version']} | Aceite: {client['accepted_at']}")
     for paragraph in (client['terms_text'] or 'Texto histórico não registrado').splitlines(): line(paragraph, paragraph[:2].rstrip('.').isdigit() or paragraph.isupper())
     if y<150: pdf.showPage(); y=height-45

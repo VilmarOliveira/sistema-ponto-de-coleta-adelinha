@@ -39,7 +39,7 @@ PICKUP_ADDRESS = "RUA AFONSO BORGES DE FREITAS, 795, JARDIM ADELINHA, FRANCA –
 PICKUP_CEP = os.environ.get("PICKUP_CEP", "14406-848")
 PRIVACY_CONTACT = os.environ.get("PRIVACY_CONTACT", "(16) 98800-4966")
 ADDRESS = PICKUP_ADDRESS  # compatibilidade com comprovantes e integrações existentes
-CLIENT_COLUMNS = "id,public_id,name,cpf,phone,email,terms_version,terms_text,signature,accepted_at,active,session_version,residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement"
+CLIENT_COLUMNS = "id,public_id,name,cpf,phone,email,terms_version,terms_text,signature,accepted_at,active,session_version,residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,legacy_public_id,contract_public_id"
 PACKAGE_COLUMNS = "id,public_id,client_id,tracking,width,height,length,weight,shelf,category,base_price,status,created_at,notified_at,picked_at"
 PICKUP_COLUMNS = "id,receiver_name,receiver_document,document_type,signature,staff,picked_at,base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,discount_type,discount_input,discount_amount,original_total,final_total,discount_applied_by,surcharge_amount,surcharge_reason,surcharge_applied_by,pix_key_snapshot,pix_receiver_snapshot,pix_key_type_snapshot"
 PICKUP_PACKAGE_COLUMNS = "pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,tracking_code,package_category,notified_at,service_amount,late_days,total_amount"
@@ -363,15 +363,16 @@ def create_app(test_config=None):
         if not query:
             return []
         like = f"%{query}%"
-        phone = digits(query)
+        phone = digits(query) if re.fullmatch(r"[0-9\s()+.\-]+", query) else ""
         phone_like = f"%{phone}%" if phone else like
         return db().execute(
             """SELECT id, public_id, name, phone FROM clients
                WHERE LOWER(name) LIKE LOWER(?)
                   OR LOWER(public_id) LIKE LOWER(?)
+                  OR LOWER(legacy_public_id) LIKE LOWER(?)
                   OR phone LIKE ?
                ORDER BY name LIMIT 30""",
-            (like, like, phone_like),
+            (like, like, like, phone_like),
         ).fetchall()
 
     def configured_banners():
@@ -687,8 +688,9 @@ def create_app(test_config=None):
         page = max(1, request.args.get("page", 1, type=int))
         users, clients = [], []
         if tab == "clientes":
-            where = "(?='' OR LOWER(name) LIKE LOWER(?) OR LOWER(public_id) LIKE LOWER(?) OR LOWER(email) LIKE LOWER(?) OR phone LIKE ?)"
-            params = (query, like, like, like, f"%{digits(query)}%" if digits(query) else like)
+            where = "(?='' OR LOWER(name) LIKE LOWER(?) OR LOWER(public_id) LIKE LOWER(?) OR LOWER(legacy_public_id) LIKE LOWER(?) OR LOWER(email) LIKE LOWER(?) OR phone LIKE ?)"
+            phone = digits(query) if re.fullmatch(r"[0-9\s()+.\-]+", query) else ""
+            params = (query, like, like, like, like, f"%{phone}%" if phone else like)
             total = db().execute(f"SELECT COUNT(*) total FROM clients WHERE {where}", params).fetchone()["total"]
             pages = max(1, math.ceil(total / 50))
             page = min(page, pages)
@@ -933,7 +935,7 @@ def create_app(test_config=None):
         if db().execute("SELECT 1 FROM clients WHERE REPLACE(REPLACE(REPLACE(cpf,'.',''),'-',''),' ','')=?", (cpf,)).fetchone():
             flash("Este CPF já possui cadastro.", "error")
             return render_template("index.html", registration_form=form), 409
-        public_id = next_public_code(db(), "CLTPCA")
+        public_id = next_public_code(db(), "CLIPCA")
         cur = db().execute(
             """INSERT INTO clients(public_id,name, cpf, phone, terms_version, terms_text, signature, accepted_at, password_hash,
                residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,email)
@@ -945,8 +947,8 @@ def create_app(test_config=None):
         )
         client_id = cur.fetchone()["id"]
         integrity = hashlib.sha256((public_id + name + cpf + terms_text() + signature + accepted_at).encode()).hexdigest()
-        db().execute("UPDATE clients SET contract_id=?,contract_hash=?,confirmation_channel=?,confirmation_destination=?,confirmation_validated_at=?,accept_ip=?,accept_user_agent=? WHERE id=?",
-            (f"CTRPCA-{client_id}", integrity, confirmation.get("channel") if confirmation else "teste",
+        db().execute("UPDATE clients SET contract_id=?,contract_hash=?,contract_public_id=?,confirmation_channel=?,confirmation_destination=?,confirmation_validated_at=?,accept_ip=?,accept_user_agent=? WHERE id=?",
+            (f"CTRPCA-{client_id}", integrity, public_id, confirmation.get("channel") if confirmation else "teste",
              confirmation.get("destination") if confirmation else None, accepted_at,
              request.headers.get("X-Forwarded-For", request.remote_addr), request.headers.get("User-Agent", "")[:500], client_id))
         db().commit()
@@ -1703,6 +1705,34 @@ def next_public_code(connection, prefix):
     return f"{prefix}-{row['last_value']}"
 
 
+def migrate_client_public_codes(connection):
+    """Atualiza o código de uso diário sem alterar documentos históricos."""
+    clients = connection.execute("SELECT id,public_id FROM clients WHERE public_id IS NOT NULL AND trim(public_id)!='' ORDER BY id").fetchall()
+    connection.execute("UPDATE clients SET contract_public_id=public_id WHERE contract_public_id IS NULL AND public_id IS NOT NULL")
+    used_codes = {client["public_id"] for client in clients}
+    sequences = connection.execute("SELECT last_value FROM id_sequences WHERE prefix IN ('CLTPCA','CLIPCA')").fetchall()
+    maximum = max((row["last_value"] for row in sequences), default=0)
+    for client in clients:
+        match = re.fullmatch(r"(?:CLTPCA|CLIPCA)-(\d+)", client["public_id"])
+        if match:
+            maximum = max(maximum, int(match.group(1)))
+    for client in clients:
+        match = re.fullmatch(r"CLTPCA-(\d+)", client["public_id"])
+        if not match:
+            continue
+        new_code = f"CLIPCA-{match.group(1)}"
+        if new_code in used_codes:
+            maximum += 1
+            new_code = f"CLIPCA-{maximum}"
+        connection.execute("UPDATE clients SET legacy_public_id=COALESCE(legacy_public_id,public_id),public_id=? WHERE id=?",
+                           (new_code, client["id"]))
+        used_codes.add(new_code)
+    if maximum:
+        connection.execute("""INSERT INTO id_sequences(prefix,last_value) VALUES('CLIPCA',?)
+            ON CONFLICT(prefix) DO UPDATE SET last_value=CASE WHEN id_sequences.last_value < ? THEN ? ELSE id_sequences.last_value END""",
+                           (maximum, maximum, maximum))
+
+
 def init_db(database):
     if not is_postgres(database):
         Path(database).parent.mkdir(parents=True, exist_ok=True)
@@ -1743,7 +1773,8 @@ def init_db(database):
         "residential_district": "TEXT", "residential_city": "TEXT", "residential_state": "TEXT",
         "residential_complement": "TEXT", "email": "TEXT", "contract_id": "TEXT", "contract_hash": "TEXT",
         "confirmation_channel": "TEXT", "confirmation_destination": "TEXT", "confirmation_validated_at": "TEXT",
-        "accept_ip": "TEXT", "accept_user_agent": "TEXT"})
+        "accept_ip": "TEXT", "accept_user_agent": "TEXT",
+        "legacy_public_id": "TEXT", "contract_public_id": "TEXT"})
     ensure_columns(connection, "pickups", {"payment_method": "TEXT", "document_type": "TEXT", "payment_confirmed_at": "TEXT", "payment_confirmed_by": "TEXT",
         "discount_type": "TEXT", "discount_input": "REAL", "discount_amount": "REAL", "original_total": "REAL",
         "final_total": "REAL", "discount_applied_by": "TEXT", "surcharge_amount": "REAL", "surcharge_reason": "TEXT",
@@ -1774,13 +1805,7 @@ def init_db(database):
     for slug, title, summary, body in initial_posts:
         connection.execute("INSERT INTO blog_posts(slug,title,summary,body,cover_alt,seo_title,seo_description,status,published_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(slug) DO NOTHING",
             (slug,title,summary,body,"",title,summary,"published",published,published))
-    existing_clients=connection.execute("SELECT public_id FROM clients WHERE public_id IS NOT NULL AND trim(public_id)!=''").fetchall()
-    client_max=0
-    for item in existing_clients:
-        match=re.fullmatch(r"CLTPCA-(\d+)",item["public_id"] or "")
-        if match: client_max=max(client_max,int(match.group(1)))
-    if client_max:
-        connection.execute("INSERT INTO id_sequences(prefix,last_value) VALUES('CLTPCA',?) ON CONFLICT(prefix) DO UPDATE SET last_value=CASE WHEN id_sequences.last_value < ? THEN ? ELSE id_sequences.last_value END",(client_max,client_max,client_max))
+    migrate_client_public_codes(connection)
     role_prefix={"administrador":"ADMPCA","gerente":"GERPCA","atendente":"ATEPCA"}
     # Sincroniza as sequências com códigos já existentes antes de gerar novos.
     # Assim uma migração nunca reutiliza números, mesmo que a tabela de sequência
