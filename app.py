@@ -408,7 +408,7 @@ def create_app(test_config=None):
                 mimetype=setting["main_banner_mime"],
                 headers={"Cache-Control": "public,max-age=3600"},
             )
-        return redirect(url_for("static", filename="brand/adelinha-2026/me-guarde-banner.webp", v=BRAND_VERSION))
+        return redirect(url_for("static", filename=f"brand/{BRAND_VERSION}/me-guarde-banner.webp", v=BRAND_VERSION))
 
     @app.post("/metricas/evento")
     def analytics_event():

@@ -89,7 +89,7 @@ def send_email(destination, subject, body):
     mail.set_content(f"{body.rstrip()}\n\n{EMAIL_SIGNATURE}\n")
     safe_body = escape(body.rstrip()).replace('\n', '<br>')
     logo_markup = '<img src="cid:logo-adelinha" width="128" height="128" alt="Ponto de Coleta Adelinha" style="display:block;width:128px;height:128px;object-fit:contain;margin-bottom:20px">' if ORIGINAL_LOGO.is_file() else ''
-    mail.add_alternative(f"""<!doctype html><html lang="pt-BR"><body style="margin:0;background:#edf8f6;color:{GRAPHITE};font-family:Montserrat,Arial,sans-serif">
+    mail.add_alternative(f"""<!doctype html><html lang="pt-BR"><body style="margin:0;background:#eafafa;color:{GRAPHITE};font-family:Montserrat,Arial,sans-serif">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px">
 <table role="presentation" width="100%" style="max-width:600px;background:#ffffff;border-top:6px solid {ORANGE};border-radius:16px"><tr><td style="padding:32px">
 {logo_markup}<h1 style="font-size:22px;margin:0 0 8px;color:{GRAPHITE}">Ponto de Coleta Adelinha</h1>

@@ -34,7 +34,7 @@ def test_palette_contrast_and_restore_preserve_saved_custom_theme(brand_app):
     app, client, database = brand_app
     variables = theme_variables()
     assert DEFAULT_THEME['secondary'] == TEAL
-    for foreground, background in [(variables['--button-ink'], ORANGE), (variables['--teal'], WHITE), (variables['--teal'], '#edf8f6'), (variables['--teal'], '#d6eeea'),
+    for foreground, background in [(variables['--button-ink'], ORANGE), (variables['--teal'], WHITE), (variables['--teal'], '#eafafa'), (variables['--teal'], '#d1f2f3'),
             (DEFAULT_THEME['link'], WHITE), (GRAPHITE, WHITE), (variables['--muted'], WHITE)]:
         assert contrast(foreground, background) >= 4.5
     for background in ('#888888', '#000000', '#ffffff', '#ff4d00', '#4db6ac', '#7142a8'):

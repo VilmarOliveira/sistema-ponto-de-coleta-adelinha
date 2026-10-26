@@ -273,6 +273,6 @@ Consulte [o procedimento desta atualização na Oracle](docs/atualizacao-oracle.
 
 ## Identidade institucional
 
-O tema padrão usa laranja, verde-água, grafite e branco, com Montserrat local e cores operacionais preservadas. Temas personalizados e imagens enviadas pelo administrador continuam disponíveis. “Restaurar cores padrão” aplica a nova identidade sem excluir os temas salvos.
+O tema padrão usa laranja, azul-turquesa (`#00CED1`), grafite e branco, com Montserrat local e cores operacionais preservadas. Temas personalizados e imagens enviadas pelo administrador continuam disponíveis. “Restaurar cores padrão” aplica a nova identidade sem excluir os temas salvos.
 
 Consulte [a documentação da identidade](docs/identidade-visual.md) para os recursos versionados, a preservação de documentos históricos e a pendência do arquivo original da logo.
