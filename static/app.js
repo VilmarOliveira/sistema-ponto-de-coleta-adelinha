@@ -488,7 +488,8 @@ if (themeForm) {
   themeForm.querySelectorAll('input[type=color]').forEach((field) => field.addEventListener('input', updatePreview)); updatePreview();
 }
 
-document.querySelectorAll('[data-banner-upload]').forEach((input) => {
+document.querySelectorAll('[data-image-upload], [data-banner-upload]').forEach((input) => {
+  const maxBytes = Number(input.dataset.maxBytes) || 900 * 1024;
   const form = input.closest('form');
   const preview = form.querySelector('[data-banner-preview]');
   const error = form.querySelector('[data-upload-error]');
@@ -502,7 +503,7 @@ document.querySelectorAll('[data-banner-upload]').forEach((input) => {
   };
   const invalid = () => {
     resetPreview(); input.value = '';
-    const message = 'Imagem inválida. Envie PNG, JPG ou WebP de até 900 KB. A imagem anterior foi preservada.';
+    const message = `Imagem inválida. Envie PNG, JPG ou WebP de até ${maxBytes / 1024} KB. A imagem anterior foi preservada.`;
     input.setCustomValidity(message);
     if (error) { error.textContent = message; error.hidden = false; }
     input.reportValidity();
@@ -513,7 +514,7 @@ document.querySelectorAll('[data-banner-upload]').forEach((input) => {
     const file = input.files[0];
     resetPreview();
     if (!file) return;
-    if (file.size > 900 * 1024 || !['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) { invalid(); return; }
+    if (file.size > maxBytes || !['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) { invalid(); return; }
     // Confere a assinatura real e a decodificação, além do MIME fornecido pelo navegador.
     input.setCustomValidity('Aguarde a validação da imagem.');
     const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
