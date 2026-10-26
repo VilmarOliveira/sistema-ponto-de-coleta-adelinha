@@ -33,7 +33,8 @@ from contract_pdf import build_contract_pdf
 
 ROOT = Path(__file__).parent
 TERMS_VERSION = CONTRACT_VERSION
-BANNER_MAX_BYTES = 900 * 1024
+IMAGE_UPLOAD_MAX_BYTES = 900 * 1024
+BANNER_MAX_BYTES = IMAGE_UPLOAD_MAX_BYTES
 PIX_KEY = "38145273000105"
 PIX_RECEIVER_NAME = "AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS"
 # O CEP não é exibido aqui porque não foi confirmado para o endereço de retirada.
@@ -284,6 +285,7 @@ def create_app(test_config=None):
                 "pickup_address": PICKUP_ADDRESS, "pix_receiver_name_full": db().execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1").fetchone()["pix_receiver_name"],
                 "logged_name": staff["name"] if staff else (app.config["STAFF_NAME"] if session.get("staff") else client_name),
                 "pickup_cep": PICKUP_CEP, "theme_colors": theme_colors, "theme_variables": theme_variables(theme_colors),
+                "image_upload_max_bytes": IMAGE_UPLOAD_MAX_BYTES,
                 "original_logo_available": ORIGINAL_LOGO.is_file(), "header_customized": bool(setting and setting["header_customized"]), "staff_account": staff,
                 "staff_legacy": session.get("staff_legacy")}
 
@@ -517,10 +519,10 @@ def create_app(test_config=None):
                 audit("alterar_banner_principal", "configuracao", 1)
             else:
                 upload = request.files.get("image")
-                data = upload.read(5 * 1024 * 1024 + 1) if upload else b""
-                mime = validated_image_type(data, 5 * 1024 * 1024)
-                if not data or len(data) > 5 * 1024 * 1024 or not mime:
-                    flash("Envie uma imagem PNG, JPG ou WebP de até 5 MB.", "error")
+                data = upload.read(IMAGE_UPLOAD_MAX_BYTES + 1) if upload else b""
+                mime = validated_image_type(data, IMAGE_UPLOAD_MAX_BYTES)
+                if not data or len(data) > IMAGE_UPLOAD_MAX_BYTES or not mime:
+                    flash("Envie uma imagem PNG, JPG ou WebP de até 900 KB. A imagem anterior foi preservada.", "error")
                     return render_template("visual_identity.html"), 400
                 db().execute("UPDATE settings SET header_image=?,header_image_mime=? WHERE id=1", (data, mime))
                 audit("alterar_identidade_visual", "configuracao", 1)
@@ -614,13 +616,19 @@ def create_app(test_config=None):
             if request.form.get("action") == "remove":
                 db().execute("DELETE FROM site_photos WHERE id=?",(photo_id,)); audit("remover_foto_local","foto",photo_id); db().commit(); flash("Foto removida.","success"); return redirect(url_for("site_photos_settings"))
             alt=request.form.get("alt_text","").strip(); kind=request.form.get("kind","")
-            upload=request.files.get("image"); data=upload.read(500*1024+1) if upload and upload.filename else b""
-            mime=validated_image_type(data,500*1024) if data else None
+            upload = request.files.get("image")
+            has_upload = bool(upload and upload.filename)
+            data = upload.read(IMAGE_UPLOAD_MAX_BYTES + 1) if has_upload else b""
+            mime = validated_image_type(data, IMAGE_UPLOAD_MAX_BYTES) if has_upload else None
+            if has_upload and not mime:
+                flash("Envie uma foto PNG, JPG ou WebP de até 900 KB. A imagem anterior foi preservada.", "error")
+                photos = db().execute("SELECT id,kind,alt_text,position,updated_at FROM site_photos ORDER BY position").fetchall()
+                return render_template("site_photos_settings.html", photos=photos), 400
             existing=db().execute("SELECT id FROM site_photos WHERE id=?",(photo_id,)).fetchone() if photo_id else None
             count=db().execute("SELECT COUNT(id) total FROM site_photos").fetchone()["total"]
             conflict=db().execute("SELECT id FROM site_photos WHERE position=? AND id!=?",(position,photo_id)).fetchone()
             if kind not in ("Fachada","Armazenamento","Atendimento") or position not in (1,2,3) or not alt or conflict or (not existing and count>=3) or (not existing and not data) or (data and not mime):
-                flash("Confira tipo, ordem, descrição e imagem PNG, JPG ou WebP de até 500 KB.","error"); return redirect(url_for("site_photos_settings"))
+                flash("Confira tipo, ordem, descrição e imagem PNG, JPG ou WebP de até 900 KB.","error"); return redirect(url_for("site_photos_settings"))
             stamp=now().isoformat()
             if existing and data: db().execute("UPDATE site_photos SET kind=?,image=?,mime_type=?,alt_text=?,position=?,updated_at=? WHERE id=?",(kind,data,mime,alt,position,stamp,photo_id))
             elif existing: db().execute("UPDATE site_photos SET kind=?,alt_text=?,position=?,updated_at=? WHERE id=?",(kind,alt,position,stamp,photo_id))
@@ -864,9 +872,12 @@ def create_app(test_config=None):
             else:
                 now_value = now().isoformat()
                 body = str(escape(request.form.get("body", "")))
-                upload = request.files.get("cover_image"); cover = upload.read(5*1024*1024+1) if upload and upload.filename else None
-                if cover and (len(cover)>5*1024*1024 or not (cover.startswith(b"\x89PNG") or cover.startswith(b"\xff\xd8\xff") or (cover.startswith(b"RIFF") and cover[8:12]==b"WEBP"))):
-                    flash("A capa deve ser PNG, JPG ou WebP de até 5 MB.", "error"); return redirect(url_for("blog_admin"))
+                upload = request.files.get("cover_image")
+                has_upload = bool(upload and upload.filename)
+                cover = upload.read(IMAGE_UPLOAD_MAX_BYTES + 1) if has_upload else None
+                if has_upload and not validated_image_type(cover, IMAGE_UPLOAD_MAX_BYTES):
+                    flash("A capa deve ser PNG, JPG ou WebP de até 900 KB. A imagem anterior foi preservada.", "error")
+                    return redirect(url_for("blog_admin"))
                 db().execute("""INSERT INTO blog_posts(slug,title,summary,body,cover_image,cover_alt,seo_title,seo_description,status,published_at,updated_at)
                     VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(slug) DO UPDATE SET title=excluded.title,summary=excluded.summary,body=excluded.body,cover_image=COALESCE(excluded.cover_image,blog_posts.cover_image),
                     cover_alt=excluded.cover_alt,seo_title=excluded.seo_title,seo_description=excluded.seo_description,status=excluded.status,

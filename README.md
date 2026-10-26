@@ -276,3 +276,14 @@ Consulte [o procedimento desta atualização na Oracle](docs/atualizacao-oracle.
 O tema padrão usa laranja, azul-turquesa (`#00CED1`), grafite e branco, com Montserrat local e cores operacionais preservadas. Temas personalizados e imagens enviadas pelo administrador continuam disponíveis. “Restaurar cores padrão” aplica a nova identidade sem excluir os temas salvos.
 
 Consulte [a documentação da identidade](docs/identidade-visual.md) para os recursos versionados, a preservação de documentos históricos e a pendência do arquivo original da logo.
+
+## Envio de imagens
+
+Todos os campos de imagem aceitam PNG, JPG ou WebP de até **900 KB por arquivo**, com validação no navegador e no servidor. Um arquivo inválido não substitui a imagem anterior. As medidas são recomendações; imagens existentes são preservadas e não são recortadas automaticamente.
+
+| Uso | Medidas recomendadas |
+| --- | --- |
+| Banners | 2048 × 684 px, horizontal |
+| Logo do cabeçalho | 640 × 640 px, quadrado |
+| Fotos do local | 1200 × 900 px, horizontal (4:3) |
+| Capas do blog | 1200 × 675 px, horizontal (16:9) |
