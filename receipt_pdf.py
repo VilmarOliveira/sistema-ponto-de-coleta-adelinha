@@ -9,6 +9,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
 from core import TZ
+from branding import DOCUMENT_BRANDS, pdf_fonts
 
 
 def _value(row, key):
@@ -41,7 +42,11 @@ def _document(withdrawal):
 class _ReceiptCanvas:
     """Desenha texto com quebra automática e cria páginas somente quando necessário."""
 
-    def __init__(self, output, title, address):
+    def __init__(self, output, title, address, brand_version=None, logo_present=False):
+        self.brand = DOCUMENT_BRANDS.get(brand_version)
+        self.branded = bool(self.brand)
+        self.logo_present = logo_present
+        self.font, self.bold_font = pdf_fonts(brand_version) if self.branded else ("Helvetica", "Helvetica-Bold")
         self.pdf = canvas.Canvas(output, pagesize=A4, pageCompression=0)
         self.width, self.height = A4
         self.margin = 45
@@ -50,13 +55,25 @@ class _ReceiptCanvas:
         self._header()
 
     def _header(self):
-        self.pdf.setFont("Helvetica-Bold", 16)
+        if self.branded:
+            from reportlab.lib.colors import HexColor
+            self.pdf.setFillColor(HexColor(self.brand["orange"]))
+            self.pdf.rect(0, self.height - 12, self.width, 12, fill=1, stroke=0)
+            self.pdf.setFillColor(HexColor(self.brand["text"]))
+            logo = self.brand["asset_root"] / "logo-original.png"
+            if self.logo_present and logo.is_file():
+                self.pdf.drawImage(str(logo), self.width - 105, self.height - 100,
+                                   width=60, height=60, preserveAspectRatio=True, mask='auto')
+        self.pdf.setFont(self.bold_font, 16)
         self.pdf.drawString(self.margin, self.height - 45, "PONTO DE COLETA ADELINHA")
-        self.pdf.setFont("Helvetica", 9)
+        self.pdf.setFont(self.font, 9)
         self.pdf.drawString(self.margin, self.height - 62, "CNPJ: 38.145.273/0001-05")
         self.pdf.drawString(self.margin, self.height - 76, self.address)
         self.pdf.drawString(self.margin, self.height - 90, "WhatsApp: (16) 98800-4966")
-        self.y = self.height - 112
+        if self.branded:
+            self.pdf.setFont(self.bold_font, 8)
+            self.pdf.drawString(self.margin, self.height - 106, "ME GUARDE — COMPROU? DEIXA COM A GENTE.")
+        self.y = self.height - (128 if self.branded else 112)
 
     def _new_page(self):
         self.pdf.showPage()
@@ -67,7 +84,7 @@ class _ReceiptCanvas:
             self._new_page()
 
     def line(self, text, bold=False, size=9, leading=13):
-        font = "Helvetica-Bold" if bold else "Helvetica"
+        font = self.bold_font if bold else self.font
         available = self.width - 2 * self.margin
         words = []
         for word in str(text).split():
@@ -115,7 +132,9 @@ def build_receipt_pdf(withdrawal, packages, address):
     output = BytesIO()
     package_id = _display(_value(withdrawal, "package_public_id"))
     receipt_code = f"CMPPCA-{_value(withdrawal, 'id')}" if _value(withdrawal, "id") else "Não registrado"
-    document = _ReceiptCanvas(output, f"Comprovante {receipt_code}", address)
+    document = _ReceiptCanvas(output, f"Comprovante {receipt_code}", address,
+                              brand_version=_value(withdrawal, "document_brand_version"),
+                              logo_present=bool(_value(withdrawal, "document_logo_present")))
     document.line(f"Comprovante: {receipt_code}", bold=True)
     final_total = _value(withdrawal, "final_total")
     if final_total is None:

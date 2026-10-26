@@ -476,7 +476,14 @@ if (themeForm) {
     const f = themeForm.elements;
     preview.style.background = f.page.value; preview.style.color = f.text.value; preview.style.borderColor = f.border.value;
     preview.querySelector('a').style.color = f.link.value; preview.querySelector('button').style.background = f.button.value;
-    preview.querySelector('button').style.color = '#fff';
+    const luminance = (color) => {
+      const rgb = color.match(/[0-9a-f]{2}/gi).map(hex => parseInt(hex, 16) / 255)
+        .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+      return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;
+    };
+    const background = luminance(f.button.value);
+    const graphiteContrast = (Math.max(background, luminance('#262626')) + .05) / (Math.min(background, luminance('#262626')) + .05);
+    preview.querySelector('button').style.color = graphiteContrast >= 4.5 ? '#262626' : (1.05 / (background + .05) >= (background + .05) / .05 ? '#ffffff' : '#000000');
   };
   themeForm.querySelectorAll('input[type=color]').forEach((field) => field.addEventListener('input', updatePreview)); updatePreview();
 }

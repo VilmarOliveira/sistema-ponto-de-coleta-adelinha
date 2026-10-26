@@ -270,3 +270,9 @@ A inicialização executa apenas criações e alterações não destrutivas: pre
 ### Banner original, WhatsApp e abas de usuários
 
 Consulte [o procedimento desta atualização na Oracle](docs/atualizacao-oracle.md) para instalar os arquivos originais, conferir o banner principal e validar as abas Clientes e Membros da equipe.
+
+## Identidade institucional
+
+O tema padrão usa laranja, verde-água, grafite e branco, com Montserrat local e cores operacionais preservadas. Temas personalizados e imagens enviadas pelo administrador continuam disponíveis. “Restaurar cores padrão” aplica a nova identidade sem excluir os temas salvos.
+
+Consulte [a documentação da identidade](docs/identidade-visual.md) para os recursos versionados, a preservação de documentos históricos e a pendência do arquivo original da logo.

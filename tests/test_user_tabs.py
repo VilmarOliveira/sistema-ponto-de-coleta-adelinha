@@ -88,12 +88,13 @@ def test_banner_dedicated_settings_preserve_original_and_other_images(users_app)
     assert client.get('/identidade/banner-principal').data == original
 
 
-def test_default_assets_and_whatsapp_link_use_raster_originals(users_app):
+def test_default_service_banner_and_original_whatsapp_asset(users_app):
     app, client = users_app
     banner = client.get('/identidade/banner-principal', follow_redirects=True)
     assert banner.status_code == 200 and banner.mimetype == 'image/webp'
     with Image.open(io.BytesIO(banner.data)) as image:
-        assert image.size == (2170, 725)
+        assert image.width >= 2048 and abs(image.width / image.height - 3) < .02
+        assert len(banner.data) <= 900 * 1024
     home = client.get('/').text
     support = home.split('class="support-float', 1)[1].split('</a>', 1)[0]
     assert 'whatsapp-original.jpg' in support and '<img' in support and '<svg' not in support
