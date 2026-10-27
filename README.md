@@ -287,3 +287,9 @@ Todos os campos de imagem aceitam PNG, JPG ou WebP de até **900 KB por arquivo*
 | Logo do cabeçalho | 640 × 640 px, quadrado |
 | Fotos do local | 1200 × 900 px, horizontal (4:3) |
 | Capas do blog | 1200 × 675 px, horizontal (16:9) |
+
+## Responsividade
+
+O mesmo sistema atende computador, tablet e celular. As regras de tela estão centralizadas em `static/responsive.css`; o menu se adapta ao espaço disponível, tabelas rolam apenas dentro de seus contêineres e assinaturas não são apagadas durante a rotação da tela.
+
+Consulte [a revisão e os resultados](docs/responsividade.md) e [as instruções dos testes de navegador](tests/browser/README.md).
