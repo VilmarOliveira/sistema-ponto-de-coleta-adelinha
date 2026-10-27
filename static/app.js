@@ -23,6 +23,8 @@ document.querySelectorAll('[data-signature-form]').forEach((form) => {
     };
   };
   const start = (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if (event.pointerId !== undefined) canvas.setPointerCapture(event.pointerId);
     drawing = true;
     const position = point(event);
     ctx.beginPath();
@@ -32,7 +34,7 @@ document.querySelectorAll('[data-signature-form]').forEach((form) => {
   const move = (event) => {
     if (!drawing) return;
     const position = point(event);
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2.5 * canvas.width / canvas.getBoundingClientRect().width;
     ctx.lineCap = 'round';
     ctx.strokeStyle = '#282620';
     ctx.lineTo(position.x, position.y);
@@ -46,15 +48,26 @@ document.querySelectorAll('[data-signature-form]').forEach((form) => {
     if (!dataUrl?.startsWith('data:image/')) return;
     const image = new Image();
     image.onload = () => {
-      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const scale = Math.min(canvas.width / image.width, canvas.height / image.height);
+      const width = image.width * scale;
+      const height = image.height * scale;
+      ctx.drawImage(image, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height);
       moved = true;
       hidden.value = dataUrl;
     };
     image.src = dataUrl;
   };
-  ['mousedown', 'touchstart'].forEach((name) => canvas.addEventListener(name, start, { passive: false }));
-  ['mousemove', 'touchmove'].forEach((name) => canvas.addEventListener(name, move, { passive: false }));
-  ['mouseup', 'mouseleave', 'touchend'].forEach((name) => canvas.addEventListener(name, stop));
+  // O bitmap mantém suas dimensões lógicas: redimensionar a tela não o apaga.
+  if ('PointerEvent' in window) {
+    canvas.addEventListener('pointerdown', start);
+    canvas.addEventListener('pointermove', move);
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(name => canvas.addEventListener(name, stop));
+  } else {
+    ['mousedown', 'touchstart'].forEach(name => canvas.addEventListener(name, start, {passive: false}));
+    ['mousemove', 'touchmove'].forEach(name => canvas.addEventListener(name, move, {passive: false}));
+    ['mouseup', 'mouseleave', 'touchend', 'touchcancel'].forEach(name => canvas.addEventListener(name, stop));
+  }
+  window.addEventListener('resize', stop);
   form.querySelector('.clear-signature')?.addEventListener('click', () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     moved = false;
@@ -541,11 +554,45 @@ document.querySelectorAll('[data-image-upload], [data-banner-upload]').forEach((
 
 const navToggle = document.querySelector('[data-nav-toggle]');
 const mainNav = document.querySelector('[data-main-nav]');
-navToggle?.addEventListener('click', () => {
-  const open = navToggle.getAttribute('aria-expanded') !== 'true';
-  navToggle.setAttribute('aria-expanded', String(open));
-  mainNav?.classList.toggle('open', open);
-});
+const siteHeader = navToggle?.closest('.site-header');
+if (siteHeader && mainNav) {
+  let navFrame = 0;
+  const closeNavigation = (restoreFocus = false) => {
+    mainNav.classList.remove('open');
+    navToggle.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) navToggle.focus();
+  };
+  const fitNavigation = () => {
+    navFrame = 0;
+    siteHeader.classList.add('nav-measuring');
+    const navWidth = mainNav.getBoundingClientRect().width;
+    const brandWidth = siteHeader.querySelector('.brand').getBoundingClientRect().width;
+    const style = getComputedStyle(siteHeader);
+    const available = siteHeader.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    siteHeader.classList.remove('nav-measuring');
+    const compact = matchMedia('(max-width: 47.99rem)').matches || navWidth + brandWidth + parseFloat(style.columnGap) > available;
+    siteHeader.classList.toggle('nav-compact', compact);
+    siteHeader.classList.toggle('nav-wide', !compact);
+    if (!compact) closeNavigation();
+  };
+  const scheduleNavigation = () => { if (!navFrame) navFrame = requestAnimationFrame(fitNavigation); };
+  navToggle.addEventListener('click', () => {
+    const open = navToggle.getAttribute('aria-expanded') !== 'true';
+    navToggle.setAttribute('aria-expanded', String(open));
+    mainNav.classList.toggle('open', open);
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && mainNav.classList.contains('open')) closeNavigation(true);
+  });
+  document.addEventListener('click', event => {
+    if (!siteHeader.contains(event.target)) closeNavigation();
+  });
+  window.addEventListener('resize', scheduleNavigation);
+  new ResizeObserver(scheduleNavigation).observe(siteHeader);
+  document.fonts.ready.then(scheduleNavigation);
+  siteHeader.querySelector('img')?.addEventListener('load', scheduleNavigation);
+  fitNavigation();
+}
 
 document.querySelectorAll('[data-metric]').forEach((link) => {
   link.addEventListener('click', () => {
@@ -557,19 +604,37 @@ document.querySelectorAll('[data-metric]').forEach((link) => {
   });
 });
 
-// Keep the floating support image clear of form fields and action buttons.
+// O suporte ocupa apenas espaço livre; não encobre controles, textos ou imagens.
 const supportFloat = document.querySelector('.support-float');
 if (supportFloat) {
   let supportFrame = 0;
+  let textNodes = [];
+  const refreshSupportText = () => {
+    textNodes = [];
+    document.querySelectorAll('.site-header, main, footer').forEach(root => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (node.textContent.trim() && !node.parentElement.closest('script,style,select,textarea,[hidden]')) textNodes.push(node);
+      }
+    });
+  };
   const updateSupportPosition = () => {
     supportFrame = 0;
     const support = supportFloat.getBoundingClientRect();
-    const controls = document.querySelectorAll('input:not([type="hidden"]), textarea, select, button, a.button, summary');
-    const overlaps = Array.from(controls).some((control) => {
-      const box = control.getBoundingClientRect();
-      return box.width > 0 && box.height > 0 && box.left < support.right && box.right > support.left && box.top < support.bottom && box.bottom > support.top;
-    });
-    supportFloat.toggleAttribute('data-control-overlap', overlaps);
+    const intersects = box => box.width > 0 && box.height > 0 && box.left < support.right && box.right > support.left && box.top < support.bottom && box.bottom > support.top;
+    const keyboard = matchMedia('(max-width: 64rem)').matches && document.activeElement?.matches('input:not([type="hidden"]),textarea,select');
+    const controls = document.querySelectorAll('.site-header a,.site-header button,.site-header .logged-user,main input:not([type="hidden"]),main textarea,main select,main button,main a.button,main summary,main canvas,main img,footer a');
+    let overlaps = keyboard || Array.from(controls).some(control => !control.closest('[hidden],[aria-hidden="true"]') && intersects(control.getBoundingClientRect()));
+    if (!overlaps) {
+      const range = document.createRange();
+      overlaps = textNodes.some(node => {
+        if (!node.isConnected || node.parentElement.closest('[hidden],[aria-hidden="true"]')) return false;
+        range.selectNodeContents(node);
+        return Array.from(range.getClientRects()).some(intersects);
+      });
+    }
+    supportFloat.toggleAttribute('data-control-overlap', Boolean(overlaps) && document.activeElement !== supportFloat);
   };
   const scheduleSupportPosition = () => {
     if (!supportFrame) supportFrame = requestAnimationFrame(updateSupportPosition);
@@ -577,6 +642,11 @@ if (supportFloat) {
   window.addEventListener('scroll', scheduleSupportPosition, {passive: true});
   window.addEventListener('resize', scheduleSupportPosition);
   document.addEventListener('toggle', scheduleSupportPosition, true);
+  document.addEventListener('focusin', scheduleSupportPosition);
+  document.addEventListener('focusout', scheduleSupportPosition);
   new ResizeObserver(scheduleSupportPosition).observe(document.body);
+  const content = document.querySelector('main');
+  if (content) new MutationObserver(() => { refreshSupportText(); scheduleSupportPosition(); }).observe(content, {subtree: true, childList: true, characterData: true});
+  refreshSupportText();
   scheduleSupportPosition();
 }
