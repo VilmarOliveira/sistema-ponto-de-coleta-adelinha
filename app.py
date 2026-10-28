@@ -13,12 +13,13 @@ from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 
-from flask import Flask, abort, flash, redirect, render_template, request, send_file, session, url_for, Response
+from flask import Flask, abort, flash, redirect, render_template, request, send_file, session, url_for, Response, render_template_string
 from markupsafe import escape
 import qrcode
 from PIL import Image, UnidentifiedImageError
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from explanatory_cards import DEFAULT_CARDS, optimized_versions
 from branding import BRAND_VERSION, ORIGINAL_LOGO, DEFAULT_THEME, default_stylesheet, theme_variables
 
 from core import (
@@ -265,7 +266,7 @@ def create_app(test_config=None):
     def protect_session_pages(response):
         # A página inicial muda conforme a sessão; dados autenticados nunca devem
         # ser reaproveitados por caches compartilhados da Oracle ou do navegador.
-        if request.endpoint == "index" or ((session.get("staff") or session.get("client_id")) and request.endpoint not in {"header_identity", "main_service_banner"}):
+        if request.endpoint == "index" or ((session.get("staff") or session.get("client_id")) and request.endpoint not in {"header_identity", "main_service_banner", "explanatory_card_image"}):
             response.headers["Cache-Control"] = "private, no-store, max-age=0"
             response.headers["Vary"] = "Cookie"
         return response
@@ -286,6 +287,7 @@ def create_app(test_config=None):
                 "logged_name": staff["name"] if staff else (app.config["STAFF_NAME"] if session.get("staff") else client_name),
                 "pickup_cep": PICKUP_CEP, "theme_colors": theme_colors, "theme_variables": theme_variables(theme_colors),
                 "image_upload_max_bytes": IMAGE_UPLOAD_MAX_BYTES,
+                "explanatory_cards": db().execute("SELECT id,title,alt_text,revision,width,height FROM explanatory_cards ORDER BY id").fetchall(),
                 "original_logo_available": ORIGINAL_LOGO.is_file(), "header_customized": bool(setting and setting["header_customized"]), "staff_account": staff,
                 "staff_legacy": session.get("staff_legacy")}
 
@@ -1350,6 +1352,80 @@ def create_app(test_config=None):
                         for row in records]
         return render_template("notification_settings.html", status=notification_config_status(), records=safe_records)
 
+    @app.route("/painel/configuracoes/cartoes-explicativos", methods=["GET", "POST"])
+    @admin_required
+    def explanatory_card_settings():
+        staff = current_staff()
+        if staff and staff["role"] != "administrador":
+            abort(403)
+        if request.method == "POST":
+            try:
+                card_id = int(request.form.get("card_id", "0"))
+            except ValueError:
+                abort(400)
+            card = db().execute("SELECT id FROM explanatory_cards WHERE id=?", (card_id,)).fetchone()
+            if not card:
+                abort(404)
+            title = request.form.get("title", "").strip()
+            alt = request.form.get("alt_text", "").strip()
+            upload = request.files.get("image")
+            has_upload = upload is not None and bool(upload.filename)
+            data = upload.read(IMAGE_UPLOAD_MAX_BYTES + 1) if has_upload else None
+            mime = validated_image_type(data, IMAGE_UPLOAD_MAX_BYTES) if has_upload else None
+            error = None
+            derivatives = None
+            if not title or len(title) > 100 or not alt or len(alt) > 300:
+                error = "Informe um título de até 100 caracteres e um texto alternativo de até 300 caracteres."
+            elif has_upload:
+                if not mime:
+                    error = "Imagem inválida. Envie PNG, JPG ou WebP de até 900 KB. A imagem anterior foi preservada."
+                else:
+                    try:
+                        dimensions, derivatives = optimized_versions(data)
+                    except (OSError, ValueError, Image.DecompressionBombError):
+                        error = "Não foi possível processar a imagem. A imagem anterior foi preservada."
+            if error:
+                flash(error, "error")
+                return render_template("explanatory_card_settings.html", attempted=request.form), 400
+            if derivatives:
+                revision = hashlib.sha256(data).hexdigest()
+                db().execute("""UPDATE explanatory_cards SET title=?,alt_text=?,image=?,mime_type=?,
+                    thumbnail_small=?,thumbnail_large=?,width=?,height=?,revision=? WHERE id=?""",
+                    (title, alt, data, mime, *derivatives, *dimensions, revision, card_id))
+            else:
+                db().execute("UPDATE explanatory_cards SET title=?,alt_text=? WHERE id=?", (title, alt, card_id))
+            audit("atualizar_cartao_explicativo", "cartao", card_id)
+            db().commit()
+            flash("Cartão atualizado com sucesso!", "success")
+            return redirect(url_for("explanatory_card_settings"))
+        return render_template("explanatory_card_settings.html")
+
+    @app.get("/cartoes-explicativos/<int:card_id>/<variant>")
+    def explanatory_card_image(card_id, variant):
+        columns = {"original": "image", "celular": "thumbnail_small", "computador": "thumbnail_large"}
+        if variant not in columns:
+            abort(404)
+        card = db().execute(f"SELECT {columns[variant]} AS content,mime_type,revision FROM explanatory_cards WHERE id=?", (card_id,)).fetchone()
+        if not card:
+            abort(404)
+        if request.args.get("v") != card["revision"]:
+            return redirect(url_for("explanatory_card_image", card_id=card_id, variant=variant, v=card["revision"]))
+        if card["content"] is None:
+            # Preserve the exact existing vector illustrations, already lightweight
+            # and resolution independent, until an administrator replaces them.
+            icon_name = DEFAULT_CARDS[card_id - 1][3]
+            data = render_template_string("{% from 'icons.html' import icon %}{{ icon(name) }}", name=icon_name)
+            data = data.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" ').replace('currentColor', '#00ced1')
+            mime = "image/svg+xml"
+        else:
+            data = bytes(card["content"])
+            mime = card["mime_type"] if variant == "original" else "image/webp"
+        response = Response(data, mimetype=mime)
+        response.set_etag(card["revision"] + "-" + variant)
+        response.headers["Cache-Control"] = "public,max-age=31536000,immutable"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response.make_conditional(request)
+
     @app.route("/painel/configuracoes/pix", methods=["GET", "POST"])
     @admin_required
     def pix_settings():
@@ -1784,6 +1860,13 @@ def init_db(database):
     ]
     for statement in statements:
         connection.execute(statement)
+    connection.execute("""CREATE TABLE IF NOT EXISTS explanatory_cards (
+        id INTEGER PRIMARY KEY CHECK(id BETWEEN 1 AND 4), title TEXT NOT NULL, alt_text TEXT NOT NULL,
+        image BYTEA, mime_type TEXT, thumbnail_small BYTEA, thumbnail_large BYTEA,
+        width INTEGER NOT NULL DEFAULT 24, height INTEGER NOT NULL DEFAULT 24,
+        revision TEXT NOT NULL DEFAULT 'initial-v1')""")
+    for card_id, title, alt, _ in DEFAULT_CARDS:
+        connection.execute("INSERT INTO explanatory_cards(id,title,alt_text) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING", (card_id,title,alt))
     columns = table_columns(connection, "clients")
     if "password_hash" not in columns:
         connection.execute("ALTER TABLE clients ADD COLUMN password_hash TEXT")
