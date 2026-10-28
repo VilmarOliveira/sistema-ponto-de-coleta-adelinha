@@ -426,12 +426,23 @@ document.querySelectorAll('[data-carousel]').forEach((carousel) => {
   if (slides.length < 2) return;
   const dots = [...carousel.querySelectorAll('[data-slide-to]')];
   const track = carousel.querySelector('.banner-slides');
-  let current = 0;
-  let timer;
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-  let hovered = matchMedia('(hover: hover)').matches && carousel.matches(':hover');
-  let focused = carousel.contains(document.activeElement);
+  const mouseDevice = matchMedia('(hover: hover) and (pointer: fine)');
+  const interval = 3000;
+  let current = Math.max(0, slides.findIndex(slide => slide.classList.contains('active')));
+  let timer = null;
+  let generation = 0;
+  let hovered = false;
   let touching = false;
+  let touchStart = null;
+  let suspended = document.hidden || !document.hasFocus();
+  const focused = () => {
+    const active = document.activeElement;
+    // A tap may leave a dot focused indefinitely. Only desktop control focus
+    // or visible keyboard focus should keep autoplay paused after touchend.
+    return dots.includes(active) && (mouseDevice.matches || active.matches(':focus-visible'));
+  };
+  const paused = () => suspended || document.hidden || reducedMotion.matches || hovered || touching || focused();
   const show = (index) => {
     current = (index + slides.length) % slides.length;
     slides.forEach((slide, i) => {
@@ -441,45 +452,101 @@ document.querySelectorAll('[data-carousel]').forEach((carousel) => {
     dots.forEach((dot, i) => i === current ? dot.setAttribute('aria-current', 'true') : dot.removeAttribute('aria-current'));
   };
   const schedule = () => {
-    clearInterval(timer);
-    const paused = reducedMotion.matches || hovered || focused || touching || document.hidden;
-    track.setAttribute('aria-live', paused ? 'polite' : 'off');
-    if (!paused) timer = setInterval(() => show(current + 1), 3000);
+    clearTimeout(timer);
+    timer = null;
+    const token = ++generation;
+    const stopped = paused();
+    track.setAttribute('aria-live', stopped ? 'polite' : 'off');
+    if (stopped) return;
+    const started = performance.now();
+    const wallStarted = Date.now();
+    timer = setTimeout(() => {
+      if (token !== generation) return;
+      timer = null;
+      if (paused()) { schedule(); return; }
+      // Some OS/browser sleep paths do not deliver lifecycle events. Never
+      // replay an overdue tick after suspension: wait a fresh full interval.
+      const elapsed = Math.max(performance.now() - started, Date.now() - wallStarted);
+      if (elapsed > interval + 250) { schedule(); return; }
+      show(current + 1);
+      schedule();
+    }, interval);
   };
   const navigate = (index) => { show(index); schedule(); };
+  const suspend = () => {
+    suspended = true;
+    hovered = false;
+    touching = false;
+    touchStart = null;
+    schedule();
+  };
+  const resume = () => {
+    suspended = document.hidden || !document.hasFocus();
+    touching = false;
+    touchStart = null;
+    hovered = !suspended && mouseDevice.matches && carousel.matches(':hover');
+    schedule();
+  };
   dots.forEach((dot, index) => dot.addEventListener('click', () => navigate(index)));
-  carousel.addEventListener('pointerenter', (event) => {
-    if (event.pointerType === 'mouse') { hovered = true; schedule(); }
+  carousel.addEventListener('pointerenter', event => {
+    if (event.pointerType === 'mouse' && !hovered) { hovered = true; schedule(); }
   });
-  carousel.addEventListener('pointerleave', (event) => {
-    if (event.pointerType === 'mouse') { hovered = false; schedule(); }
+  carousel.addEventListener('pointerleave', event => {
+    if (event.pointerType === 'mouse' && hovered) { hovered = false; schedule(); }
   });
-  carousel.addEventListener('focusin', () => { focused = true; schedule(); });
-  carousel.addEventListener('focusout', (event) => {
-    focused = carousel.contains(event.relatedTarget); schedule();
-  });
+  // Reconcile hover even if pointerleave was lost during tab/OS suspension.
+  document.addEventListener('pointermove', event => {
+    if (event.pointerType !== 'mouse' || suspended) return;
+    const inside = carousel.contains(event.target);
+    if (inside !== hovered) { hovered = inside; schedule(); }
+  }, {passive: true});
+  carousel.addEventListener('focusin', schedule);
+  carousel.addEventListener('focusout', () => queueMicrotask(schedule));
   reducedMotion.addEventListener('change', schedule);
-  carousel.addEventListener('keydown', (event) => {
+  mouseDevice.addEventListener('change', () => {
+    hovered = !suspended && mouseDevice.matches && carousel.matches(':hover');
+    schedule();
+  });
+  carousel.addEventListener('keydown', event => {
     if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
       event.preventDefault(); navigate(current + (event.key === 'ArrowRight' ? 1 : -1));
     }
   });
-  let touchStart;
-  track.addEventListener('touchstart', (event) => {
-    touching = true; schedule();
-    touchStart = event.touches.length === 1 ? {x: event.touches[0].clientX, y: event.touches[0].clientY} : null;
+  carousel.addEventListener('touchstart', event => {
+    touching = true;
+    touchStart = event.touches.length === 1 && track.contains(event.target)
+      ? {x: event.touches[0].clientX, y: event.touches[0].clientY} : null;
+    schedule();
   }, {passive: true});
-  track.addEventListener('touchend', (event) => {
-    touching = false; schedule();
-    if (!touchStart || !event.changedTouches.length) return;
-    const dx = event.changedTouches[0].clientX - touchStart.x;
-    const dy = event.changedTouches[0].clientY - touchStart.y;
-    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) navigate(current + (dx < 0 ? 1 : -1));
+  window.addEventListener('touchend', event => {
+    if (!touching) return;
+    if (event.touches.length) { touchStart = null; return; }
+    touching = false;
+    const start = touchStart;
     touchStart = null;
+    if (start && event.changedTouches.length) {
+      const dx = event.changedTouches[0].clientX - start.x;
+      const dy = event.changedTouches[0].clientY - start.y;
+      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+        navigate(current + (dx < 0 ? 1 : -1));
+        return;
+      }
+    }
+    schedule();
   }, {passive: true});
-  track.addEventListener('touchcancel', () => { touching = false; touchStart = null; schedule(); }, {passive: true});
-  document.addEventListener('visibilitychange', schedule);
-  schedule();
+  window.addEventListener('touchcancel', () => {
+    if (!touching) return;
+    touching = false; touchStart = null; schedule();
+  }, {passive: true});
+  document.addEventListener('visibilitychange', () => document.hidden ? suspend() : resume());
+  document.addEventListener('freeze', suspend);
+  document.addEventListener('resume', resume);
+  window.addEventListener('blur', suspend);
+  window.addEventListener('focus', resume);
+  window.addEventListener('pagehide', suspend);
+  window.addEventListener('pageshow', resume);
+  show(current);
+  resume();
 });
 
 const themeForm = document.querySelector('#theme-form');

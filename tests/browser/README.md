@@ -67,3 +67,11 @@ NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/stores_signup.cj
 ```
 
 Verifica visitante, cliente e administrador nas sete larguras, incluindo menus, logout, navegação ao cadastro, logos, movimento contínuo, pausa e movimento reduzido. Relatório e capturas em `/tmp/adelinha-stores-results`.
+
+Retomada e intervalo dos banners (mesmo servidor isolado):
+
+```bash
+NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/carousel_resume.cjs
+```
+
+Usa relógio controlado para comprovar os três segundos completos e eventos de ciclo de vida simulados em computador/celular. Inclui suspensão real de JavaScript no Chromium via CDP. Relatório em `/tmp/adelinha-carousel-results/report.json`. Limites de validação física em `docs/retomada-carrossel.md`.
