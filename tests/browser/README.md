@@ -51,3 +51,11 @@ O arquivo de relatório anterior deve pertencer à execução e versão que est�
 ## Limites
 
 A verificação é de Chromium com telas e toque emulados. Ela não substitui testes em aparelhos físicos ou em Safari/iOS. Caixas nativas de confirmação são controladas pelo navegador, não pelo CSS do site. Os serviços externos não recebem mensagens, pagamentos ou outros dados durante a execução.
+
+Para verificar especificamente a configuração e ampliação dos quatro cartões, com o mesmo servidor de fixtures:
+
+```bash
+NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/explanatory_cards.cjs
+```
+
+O teste usa somente `127.0.0.1:5001`, publica um cartão fictício no banco temporário e verifica as sete larguras, miniaturas/original, upload, cancelamento, cache, teclado e toque.

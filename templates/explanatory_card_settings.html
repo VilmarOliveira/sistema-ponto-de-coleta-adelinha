@@ -1,0 +1,13 @@
+{% extends 'base.html' %}{% from 'icons.html' import icon %}{% from 'image_upload.html' import image_upload with context %}
+{% block title %}Cartões explicativos · Configurações{% endblock %}
+{% block content %}<section class="panel-card"><span class="eyebrow">CONFIGURAÇÕES</span><h1>Cartões explicativos</h1><p>Edite os quatro cartões da página inicial. As alterações são publicadas ao salvar. Outras proporções são aceitas; a imagem será exibida completa.</p>
+<div class="explanatory-admin-grid">{% for card in explanatory_cards %}
+<article class="package"><h2>Cartão {{ card.id }}</h2><form method="post" enctype="multipart/form-data">
+<input type="hidden" name="card_id" value="{{ card.id }}">
+<img class="explanatory-admin-preview" data-banner-preview src="{{ url_for('explanatory_card_image',card_id=card.id,variant='computador',v=card.revision) }}" alt="{{ card.alt_text }}" width="{{ card.width }}" height="{{ card.height }}">
+{{ image_upload('Substituir imagem', 'explanatory-' ~ card.id, kind='explanatory') }}
+{% set values = attempted if attempted is defined and attempted.card_id == card.id|string else card %}
+<label>Título<input name="title" value="{{ values.title }}" required maxlength="100"></label>
+<label>Texto alternativo<textarea name="alt_text" required maxlength="300">{{ values.alt_text }}</textarea></label>
+<div class="actions"><button class="button primary" type="submit">{{ icon('save') }} Salvar alterações</button><a class="button ghost" href="{{ url_for('explanatory_card_settings') }}">Cancelar</a></div>
+</form></article>{% endfor %}</div><a class="button ghost bottom-back" href="{{ url_for('settings_hub') }}">{{ icon('back') }} Voltar às Configurações</a></section>{% endblock %}

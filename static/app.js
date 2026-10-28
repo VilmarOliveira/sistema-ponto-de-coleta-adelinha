@@ -650,3 +650,40 @@ if (supportFloat) {
   refreshSupportText();
   scheduleSupportPosition();
 }
+
+// Native dialog provides modal focus confinement and Escape handling.
+const cardDialog = document.querySelector('[data-card-dialog]');
+if (cardDialog && typeof cardDialog.showModal === 'function') {
+  const full = cardDialog.querySelector('[data-card-full]');
+  const error = cardDialog.querySelector('[data-card-load-error]');
+  let opener;
+  document.querySelectorAll('[data-card-enlarge]').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault(); opener = link;
+      cardDialog.querySelector('#card-dialog-title').textContent = link.dataset.title;
+      full.alt = link.dataset.alt;
+      error.hidden = true;
+      full.src = link.href; // Original is never requested before this interaction.
+      cardDialog.showModal();
+      cardDialog.querySelector('[data-card-close]').focus();
+    });
+  });
+  full.addEventListener('error', () => { error.hidden = false; });
+  cardDialog.querySelector('[data-card-close]').addEventListener('click', () => cardDialog.close());
+  cardDialog.addEventListener('click', (event) => {
+    if (!event.target.closest('img,button')) cardDialog.close();
+  });
+  cardDialog.addEventListener('keydown', (event) => {
+    // With a single control, keep Tab/Shift+Tab on the close button instead
+    // of allowing browser chrome to take focus during the modal cycle.
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      cardDialog.querySelector('[data-card-close]').focus();
+    }
+  });
+  cardDialog.addEventListener('close', () => {
+    full.removeAttribute('src');
+    opener?.focus({preventScroll:true});
+  });
+}

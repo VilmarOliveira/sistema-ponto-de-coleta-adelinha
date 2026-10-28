@@ -158,3 +158,27 @@
 @media print {
   .nav-toggle, .support-float { display: none !important; }
 }
+
+/* Cartões: uma única moldura estável, com imagens completas de qualquer proporção. */
+@media screen {
+  .explanatory-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--screen-gap); }
+  .explanatory-grid article { background:var(--surface,#fff); border-radius:18px; padding:12px; text-align:center; }
+  .explanatory-open { display:block; color:var(--text,#262626); text-decoration:none; border-radius:12px; }
+  .explanatory-open:focus-visible { outline:3px solid var(--orange); outline-offset:4px; }
+  .explanatory-open picture { display:flex; align-items:center; justify-content:center; aspect-ratio:2/3; width:100%; background:var(--soft,#f2faf9); border-radius:12px; }
+  .explanatory-open img { display:block; width:100%; height:100%; object-fit:contain; }
+  .explanatory-open span { display:block; padding:12px 0; text-decoration:underline; }
+  .explanatory-open .enlarge-touch { display:none; }
+  .explanatory-admin-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--screen-gap); }
+  .explanatory-admin-preview { display:block; width:100%; height:260px; object-fit:contain; margin-bottom:16px; }
+  .card-lightbox { width:min(1000px,calc(100% - 24px)); max-width:calc(100% - 24px); max-height:calc(100dvh - 24px); padding:16px; border:0; border-radius:16px; color:var(--text,#262626); background:var(--surface,#fff); overflow:auto; }
+  .card-lightbox::backdrop { background:#000b; }
+  .card-lightbox-content { display:flex; flex-direction:column; align-items:center; gap:12px; }
+  .card-lightbox [data-card-close] { align-self:flex-end; flex:none; }
+  .card-lightbox h2 { font-size:1.2rem; margin:0; }
+  .card-lightbox img { display:block; max-width:100%; max-height:calc(100dvh - 180px); width:auto; height:auto; object-fit:contain; }
+}
+@media screen and (max-width:64rem) { .explanatory-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media screen and (max-width:47.99rem) { .explanatory-admin-grid { grid-template-columns:minmax(0,1fr); } }
+@media screen and (max-width:24rem) { .explanatory-grid { grid-template-columns:minmax(0,1fr); } }
+@media (pointer:coarse) { .explanatory-open .enlarge-desktop { display:none; } .explanatory-open .enlarge-touch { display:block; } }

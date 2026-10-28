@@ -84,3 +84,31 @@ def test_client_prefix_migration_on_postgresql():
     assert next_public_code(connection, 'CLIPCA') == f'CLIPCA-{number+1}'
     connection.rollback()
     connection.close()
+
+
+@pytest.mark.skipif(not os.environ.get('TEST_DATABASE_URL'), reason='TEST_DATABASE_URL não configurada')
+def test_explanatory_cards_persist_on_postgresql():
+    import io
+    from PIL import Image
+    config = {'TESTING': True, 'SECRET_KEY': 'pg-cards', 'DATABASE': os.environ['TEST_DATABASE_URL']}
+    app = create_app(config)
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session.update(staff='postgres-test', staff_legacy=True, csrf_token='pg-cards-csrf')
+    output = io.BytesIO()
+    Image.new('RGB', (800, 1200), 'orange').save(output, 'PNG')
+    content = output.getvalue()
+    response = client.post('/painel/configuracoes/cartoes-explicativos', data={
+        'card_id': '4', 'title': 'Aguarde e retire', 'alt_text': 'Cartão persistido no PostgreSQL',
+        'image': (io.BytesIO(content), 'cartao.png'), 'csrf_token': 'pg-cards-csrf'})
+    assert response.status_code == 302
+    restarted = create_app(config)
+    with restarted.test_client() as visitor:
+        assert 'Cartão persistido no PostgreSQL' in visitor.get('/').text
+        image = visitor.get('/cartoes-explicativos/4/original', follow_redirects=True)
+        assert image.data == content
+        for variant in ('celular', 'computador'):
+            thumbnail = visitor.get(f'/cartoes-explicativos/4/{variant}', follow_redirects=True)
+            assert thumbnail.mimetype == 'image/webp'
+            with Image.open(io.BytesIO(thumbnail.data)) as decoded:
+                assert decoded.format == 'WEBP'
