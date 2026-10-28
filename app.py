@@ -20,6 +20,7 @@ from PIL import Image, UnidentifiedImageError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from explanatory_cards import DEFAULT_CARDS, optimized_versions
+from store_logos import STORE_LOGOS
 from branding import BRAND_VERSION, ORIGINAL_LOGO, DEFAULT_THEME, default_stylesheet, theme_variables
 
 from core import (
@@ -286,7 +287,7 @@ def create_app(test_config=None):
                 "pickup_address": PICKUP_ADDRESS, "pix_receiver_name_full": db().execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1").fetchone()["pix_receiver_name"],
                 "logged_name": staff["name"] if staff else (app.config["STAFF_NAME"] if session.get("staff") else client_name),
                 "pickup_cep": PICKUP_CEP, "theme_colors": theme_colors, "theme_variables": theme_variables(theme_colors),
-                "image_upload_max_bytes": IMAGE_UPLOAD_MAX_BYTES,
+                "image_upload_max_bytes": IMAGE_UPLOAD_MAX_BYTES, "store_logos": STORE_LOGOS,
                 "explanatory_cards": db().execute("SELECT id,title,alt_text,revision,width,height FROM explanatory_cards ORDER BY id").fetchall(),
                 "original_logo_available": ORIGINAL_LOGO.is_file(), "header_customized": bool(setting and setting["header_customized"]), "staff_account": staff,
                 "staff_legacy": session.get("staff_legacy")}
