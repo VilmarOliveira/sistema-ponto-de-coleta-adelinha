@@ -162,11 +162,12 @@
 /* Cartões: uma única moldura estável, com imagens completas de qualquer proporção. */
 @media screen {
   .explanatory-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--screen-gap); }
-  .explanatory-grid article { background:var(--surface,#fff); border-radius:18px; padding:12px; text-align:center; }
-  .explanatory-open { display:block; color:var(--text,#262626); text-decoration:none; border-radius:12px; }
+  .explanatory-grid article { display:flex; flex-direction:column; background:var(--surface,#fff); border-radius:18px; padding:12px; text-align:center; }
+  .explanatory-grid article > h3 { margin:0 0 12px; }
+  .explanatory-open { display:block; margin-top:auto; width:100%; color:var(--text,#262626); text-decoration:none; border-radius:12px; }
   .explanatory-open:focus-visible { outline:3px solid var(--orange); outline-offset:4px; }
   .explanatory-open picture { display:flex; align-items:center; justify-content:center; aspect-ratio:2/3; width:100%; background:var(--soft,#f2faf9); border-radius:12px; }
-  .explanatory-open img { display:block; width:100%; height:100%; object-fit:contain; }
+  .explanatory-open img { display:block; width:100%; height:100%; object-fit:contain; object-position:center; margin:0; padding:0; }
   .explanatory-open span { display:block; padding:12px 0; text-decoration:underline; }
   .explanatory-open .enlarge-touch { display:none; }
   .explanatory-admin-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--screen-gap); }
@@ -179,6 +180,5 @@
   .card-lightbox img { display:block; max-width:100%; max-height:calc(100dvh - 180px); width:auto; height:auto; object-fit:contain; }
 }
 @media screen and (max-width:64rem) { .explanatory-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media screen and (max-width:47.99rem) { .explanatory-admin-grid { grid-template-columns:minmax(0,1fr); } }
-@media screen and (max-width:24rem) { .explanatory-grid { grid-template-columns:minmax(0,1fr); } }
+@media screen and (max-width:47.99rem) { .explanatory-grid { grid-template-columns:minmax(0,1fr); } .explanatory-admin-grid { grid-template-columns:minmax(0,1fr); } }
 @media (pointer:coarse) { .explanatory-open .enlarge-desktop { display:none; } .explanatory-open .enlarge-touch { display:block; } }
