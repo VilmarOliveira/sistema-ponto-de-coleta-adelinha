@@ -50,6 +50,30 @@ const SETTINGS='/painel/configuracoes/cartoes-explicativos';
       const page=await context.newPage();const requests=[];const jsErrors=[];
       page.on('request',req=>requests.push(req.url()));page.on('pageerror',e=>jsErrors.push(e.message));
       await page.goto(BASE+'/');
+      assert.equal(await page.locator('.steps-grid').count(),0);
+      assert.equal(await page.getByRole('heading',{name:'Veja um exemplo de como é fácil usar nosso serviço',exact:true}).count(),1);
+      const layout=await page.locator('.explanatory-grid').evaluate(grid=>{
+        const box=el=>{const r=el.getBoundingClientRect();return {top:r.top,left:r.left,width:r.width,height:r.height};};
+        return {beforeStores:!!(grid.closest('section').compareDocumentPosition(document.querySelector('.favorite-stores')) & Node.DOCUMENT_POSITION_FOLLOWING),
+          cards:[...grid.children].map(card=>({title:box(card.querySelector('h3')),image:box(card.querySelector('picture')),link:box(card.querySelector('.enlarge-desktop')),padding:getComputedStyle(card.querySelector('img')).padding,position:getComputedStyle(card.querySelector('img')).objectPosition}))};
+      });
+      assert(layout.beforeStores);
+      assert.equal(layout.cards.length,4);
+      for(const card of layout.cards){
+        assert(Math.abs(card.image.width/card.image.height-2/3)<.005);
+        assert.equal(card.padding,'0px');assert.equal(card.position,'50% 50%');
+      }
+      if(width<768){
+        assert(layout.cards.every(card=>Math.abs(card.image.left-layout.cards[0].image.left)<1));
+        for(let i=1;i<4;i++)assert(layout.cards[i].title.top>layout.cards[i-1].image.top+layout.cards[i-1].image.height);
+      }else{
+        const group=width>1024?4:2;
+        for(let start=0;start<4;start+=group){
+          for(let i=start+1;i<start+group;i++){
+            for(const part of ['title','image','link'])assert(Math.abs(layout.cards[i][part].top-layout.cards[start][part].top)<1,`${width}: ${part} alignment`);
+          }
+        }
+      }
       const link=page.locator('[data-card-enlarge]').first();
       await link.scrollIntoViewIfNeeded();
       await page.waitForFunction(()=>document.querySelector('.explanatory-open img').complete);
