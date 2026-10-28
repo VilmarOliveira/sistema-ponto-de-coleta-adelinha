@@ -182,3 +182,42 @@
 @media screen and (max-width:64rem) { .explanatory-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media screen and (max-width:47.99rem) { .explanatory-grid { grid-template-columns:minmax(0,1fr); } .explanatory-admin-grid { grid-template-columns:minmax(0,1fr); } }
 @media (pointer:coarse) { .explanatory-open .enlarge-desktop { display:none; } .explanatory-open .enlarge-touch { display:block; } }
+
+@media screen {
+  .site-header .header-signup { display:inline-flex; align-items:center; justify-content:center; flex:none; border:1px solid #d43f00; border-radius:12px; background:#d43f00; color:#fff; font-weight:800; white-space:nowrap; }
+  .site-header .header-signup:hover { background:#c43b00; border-color:#c43b00; }
+  .site-header .signup-mobile { display:none; }
+  .site-header.nav-compact.has-signup { gap:8px; }
+  .site-header.nav-compact.has-signup .brand { flex:1 1 80px; max-width:220px; }
+  .site-header.nav-compact .signup-mobile { display:inline-flex; padding:9px 10px; font-size:14px; }
+  .site-header.nav-compact .signup-mobile .ui-icon { width:18px; height:18px; margin-right:5px; }
+  .site-header.nav-compact.has-signup .nav-toggle { padding:9px 10px; font-size:14px; }
+  .site-header.nav-compact .site-nav .signup-desktop { display:none; }
+  .site-header.nav-measuring .site-nav .signup-desktop { display:inline-flex; }
+  .site-header.nav-compact.has-signup .brand-text { font-size:12px; }
+  .site-header.nav-compact.has-signup .brand-text strong { font-size:clamp(13px,3.6vw,18px); white-space:nowrap; }
+  .site-header.nav-compact.has-signup .brand-text small { font-size:9px; line-height:1.2; }
+  #cadastro { scroll-margin-top:20px; }
+}
+
+@media screen {
+  .store-marquee { width:100%; min-width:0; overflow:hidden; margin:24px 0; padding:8px 0; background:#fff; border-radius:12px; mask-image:linear-gradient(to right,transparent,#000 4%,#000 96%,transparent); }
+  .store-marquee:focus-visible { outline:3px solid var(--orange); outline-offset:4px; }
+  .store-track { display:flex; width:max-content; animation:stores-left 65s linear infinite; }
+  .store-group { display:flex; flex:none; align-items:center; list-style:none; gap:24px; margin:0; padding:0 24px 0 0; }
+  .store-group li { display:flex; align-items:center; justify-content:center; flex:none; width:160px; height:80px; padding:8px; }
+  .store-group img { display:block; width:100%; height:100%; object-fit:contain; object-position:center; }
+  .store-marquee:hover .store-track, .store-marquee:focus-within .store-track { animation-play-state:paused; }
+}
+@keyframes stores-left { from { transform:translateX(0); } to { transform:translateX(-50%); } }
+@media (prefers-reduced-motion:reduce) {
+  .store-track { animation:none; width:100%; transform:none; }
+  .store-group { display:grid; width:100%; grid-template-columns:repeat(auto-fit,minmax(min(100%,120px),1fr)); gap:16px; padding:0; }
+  .store-group li { width:100%; }
+  .store-group[aria-hidden=true] { display:none; }
+  .store-marquee { mask-image:none; }
+}
+@media screen {
+  .store-logo-tiktok-shop { background:#111; border-radius:10px; }
+  .store-logo-renner, .store-logo-centauro { background:#e21c2a; border-radius:10px; }
+}

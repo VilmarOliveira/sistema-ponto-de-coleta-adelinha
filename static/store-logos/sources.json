@@ -1,0 +1,83 @@
+{
+  "mercado-livre": {
+    "asset": "mercado-livre.webp",
+    "source": "https://github.com/jefposan/avantalab/blob/027fd1e85dbad471146d0b1bb7556106f5787ced/public/images/marketplaces/mercado-livre.png",
+    "source_sha256": "dfde1f182b7777b74765c605661a7256cd3038aaf83696aa84b69ee294975190"
+  },
+  "shopee": {
+    "asset": "shopee.svg",
+    "source": "https://github.com/khoahd7621/clone-shopee/blob/575dd151d583aa99aa4f147d8a6d7cf57679f535/assets/img/shopee.svg",
+    "source_sha256": "8a7f3a0f627d2f0a4b8daea694d32b8933ed70da5a8f193529c0321a3201da01"
+  },
+  "amazon": {
+    "asset": "amazon.svg",
+    "source": "https://github.com/VectorLogoZone/vectorlogozone/blob/7442420d3dc3ae97476fc57a64edfbfd7be95e24/src/content/logos/amazon/amazon-ar21.svg",
+    "source_sha256": "fa114e8ade4e16b8d0a7580a3f7ba85c29992ee19712161788fca53593211bfd"
+  },
+  "shein": {
+    "asset": "shein.webp",
+    "source": "https://github.com/ryangran/gastovisionmkt/blob/aa865b04d5800a3642f84994c73f4eaa5b7ad82c/src/assets/shein-logo.png",
+    "source_sha256": "deac0bf0de15289cdb1e2e13921e494ad525b951c3c6e4f91236d9ef55b0607d"
+  },
+  "tiktok-shop": {
+    "asset": "tiktok-shop.svg",
+    "source": "https://github.com/jefposan/avantalab/blob/027fd1e85dbad471146d0b1bb7556106f5787ced/public/images/marketplaces/tiktok-shop.svg",
+    "source_sha256": "82619d2dca7ce7361512213df1f067f6da65915105ecceefa513b91e7129e11e"
+  },
+  "aliexpress": {
+    "asset": "aliexpress.svg",
+    "source": "https://github.com/pheralb/svgl/blob/88467c074c30c64ece8418ecda010c7dce404419/static/library/aliexpress-logo.svg",
+    "source_sha256": "179923fc0a216181da92e5453b1cc67551143ccd0543117596c18eeec2d3403a"
+  },
+  "magalu": {
+    "asset": "magalu.webp",
+    "source": "https://github.com/ryangran/gastovisionmkt/blob/aa865b04d5800a3642f84994c73f4eaa5b7ad82c/src/assets/magalu-logo.png",
+    "source_sha256": "461cefea8850c1334790c82b4deea0d9bab7eb902c81a6ffc6b84e5f5ad24173"
+  },
+  "americanas": {
+    "asset": "americanas.webp",
+    "source": "https://github.com/PedroAssencao/americanasClone/blob/6141654036aebc43f56e3ad50b925bc4192f583d/assets/americanas-logo-0.png",
+    "source_sha256": "b25ec7a50b47497d26d324cdadb4c02cf39187b3e6fa53adf5181fb77470ef53"
+  },
+  "casas-bahia": {
+    "asset": "casas-bahia.svg",
+    "source": "https://github.com/jefposan/avantalab/blob/027fd1e85dbad471146d0b1bb7556106f5787ced/public/images/marketplaces/casas-bahia.svg",
+    "source_sha256": "a53f47c86f85685ce8bdc0ee0122c7231944bc824f78fdb97e4f4489b4031e11"
+  },
+  "carrefour": {
+    "asset": "carrefour.svg",
+    "source": "https://github.com/Kononboarding/manuais-koncili/blob/0890299fb1fd5308e98d633fc2c4c82a2916d930/images/logo-carrefour.png",
+    "source_sha256": "e2c4162b24134fa3fbade22536ca0a8cffa66154dfd57e71ef7b7acfe580d9ae",
+    "optimization": "ViewBox enquadra a marca, removendo apenas margens brancas externas; formas e cores originais preservadas."
+  },
+  "netshoes": {
+    "asset": "netshoes.webp",
+    "source": "https://github.com/Kononboarding/manuais-koncili/blob/0890299fb1fd5308e98d633fc2c4c82a2916d930/images/logo-netshoes.jpg",
+    "source_sha256": "75e980c883a68ae8373fc1df05474d4c0b03e5032b1fc45819b20e835f833e0c"
+  },
+  "dafiti": {
+    "asset": "dafiti.webp",
+    "source": "https://github.com/Banmugo/vtex-clone-dafiti/blob/006b0d56fed563bc3d4eee3a8e1a29b706b8970f/assets/header/dafiti-logo.png",
+    "source_sha256": "d629d3ee2ee89b412417c759e7fd2e6da028d8f446aaade0ead913ee2be49f16"
+  },
+  "centauro": {
+    "asset": "centauro.webp",
+    "source": "https://github.com/Arthurdnl/Clone-Centauro-home-page/blob/9cf1610506b8ad6893e0e65142f7f60add6bdd2b/imagens/icones/centauro-logo.png",
+    "source_sha256": "41d112bbb99b8def40b2706881b5c91d7f8fd374444006eae73d470c7132c3fa"
+  },
+  "renner": {
+    "asset": "renner.webp",
+    "source": "https://github.com/KerenMS/LoginRenner/blob/1291773582fbdf86798b8b523bbc070eb279dcfc/src/assets/images/logo_lojasrenner.png",
+    "source_sha256": "bcac439722e0a5ba36841b3adc870a14d28f573765379e130591cd3cc04cb1ab"
+  },
+  "cea": {
+    "asset": "cea.webp",
+    "source": "https://github.com/jessicagasque/replica-cea/blob/beebd4fb2837c959ea2a513b0d93ce7f97320c12/fwd/c-e-a-logo-1.png",
+    "source_sha256": "eafc2b332e7a21a72ee27eef74dce97bdf891ba7b3169dc3d21ceb4c3930a6f1"
+  },
+  "temu": {
+    "asset": "temu.webp",
+    "source": "https://github.com/WG170320/santoryu/blob/2655f32c7b3e9ddad6b3ad18479cbf03c2ceab1b/temu-logo.png",
+    "source_sha256": "111ebba6a1b15ba3b587cd022f7bada6852d10e35bdbdb41f7e65de587bb6dd4"
+  }
+}

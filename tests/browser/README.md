@@ -59,3 +59,11 @@ NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/explanatory_card
 ```
 
 O teste usa somente `127.0.0.1:5001`, publica um cartão fictício no banco temporário e verifica as sete larguras, miniaturas/original, upload, cancelamento, cache, teclado e toque.
+
+Faixa das 16 lojas e botão de cadastro (mesmo servidor isolado):
+
+```bash
+NODE_PATH=/tmp/adelinha-browser/node_modules node tests/browser/stores_signup.cjs
+```
+
+Verifica visitante, cliente e administrador nas sete larguras, incluindo menus, logout, navegação ao cadastro, logos, movimento contínuo, pausa e movimento reduzido. Relatório e capturas em `/tmp/adelinha-stores-results`.
