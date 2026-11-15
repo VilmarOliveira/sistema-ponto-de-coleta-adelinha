@@ -7,9 +7,9 @@
   /home/ubuntu/sistema-ponto-de-coleta-adelinha-teste.
 
 O ambiente de testes usa o banco antigo preservado. Não copia credenciais da
-produção. SITE_ENVIRONMENT=test bloqueia Gmail, WhatsApp e chamadas reais à Fast,
-mesmo com chaves inseridas indevidamente, e desativa Google OAuth e login
-administrativo legado. O acesso de administrador usa a conta principal que já
+produção. SITE_ENVIRONMENT=test bloqueia WhatsApp e chamadas reais à Fast,
+mesmo com chaves inseridas indevidamente, e desativa login administrativo legado.
+Google e Gmail permanecem bloqueados por padrão e exigem liberação explícita abaixo. O acesso de administrador usa a conta principal que já
 existe no banco antigo, com seu e-mail e senha. O cookie e a chave de sessão são
 separados. Não ativa Flask TESTING/debug. Uma impressão digital do banco de
 produção impede inicializar os testes apontando para ele.
@@ -91,7 +91,33 @@ git pull --ff-only origin develop
 sudo systemctl restart ponto-coleta-teste.service
 ```
 
-Não trocar DATABASE_URL da produção para testar. Fluxos manuais que exigem
-entrega real de códigos ou pagamento real ficam desativados; testes automatizados
-usam provedores simulados. Uma integração sandbox futura exige configuração
-própria, sem reutilizar chaves de produção.
+Não trocar DATABASE_URL da produção para testar. Pagamentos reais permanecem
+bloqueados. Testes automatizados usam provedores simulados.
+
+## Google e Gmail separados
+
+Criar clientes OAuth próprios para Login e Gmail de testes. Preencher somente
+/etc/ponto-coleta/site-teste.env, sem copiar credenciais da produção:
+
+```ini
+STAGING_GOOGLE_LOGIN_ENABLED=1
+GOOGLE_LOGIN_ENABLED=1
+GOOGLE_LOGIN_CLIENT_ID=<cliente Login Testes>
+GOOGLE_LOGIN_CLIENT_SECRET=<segredo Login Testes>
+GOOGLE_LOGIN_REDIRECT_URI=https://pontodecoletaadl.servehttp.com/cliente/google/retorno
+STAGING_EMAIL_ENABLED=1
+STAGING_EMAIL_RECIPIENTS=<endereços de teste separados por vírgula>
+GMAIL_CLIENT_ID=<cliente Gmail Testes>
+GMAIL_CLIENT_SECRET=<segredo Gmail Testes>
+GMAIL_REFRESH_TOKEN=<token autorizado por pontodecoletaadelinha@gmail.com>
+```
+
+Remetente permanece pontodecoletaadelinha@gmail.com. Os envios são reais, com
+assunto [TESTES], e só permitem destinatários explicitamente listados. Lista vazia
+bloqueia Gmail inclusive a renovação de token; destinatários fora da lista não
+fazem chamadas externas. Não há redirecionamento silencioso de códigos pessoais.
+Não instalar timers de notificações para o ambiente de testes.
+Após atualizar o código, reiniciar somente ponto-coleta-teste.service.
+Para desativar, definir STAGING_EMAIL_ENABLED=0 e/ou
+STAGING_GOOGLE_LOGIN_ENABLED=0 e reiniciar esse serviço. Produção não usa essas
+opções. O retorno Google em testes deve ser exatamente o domínio antigo acima.

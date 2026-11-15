@@ -154,12 +154,13 @@ def terms_text():
 
 
 def create_app(test_config=None):
-    from environment_mode import is_test_environment, database_fingerprint
+    from environment_mode import is_test_environment, database_fingerprint, test_integration_enabled
     app = Flask(__name__)
     from performance import install as install_asset_delivery
     install_asset_delivery(app)
     app.config.update(
         SITE_ENVIRONMENT=os.environ.get("SITE_ENVIRONMENT", "production"),
+        STAGING_GOOGLE_LOGIN_ENABLED=os.environ.get('STAGING_GOOGLE_LOGIN_ENABLED', '0'),
         STAGING_PRODUCTION_FINGERPRINT=os.environ.get("STAGING_PRODUCTION_FINGERPRINT", ""),
         SECRET_KEY=os.environ.get("SECRET_KEY", secrets.token_hex(32)),
         DATABASE=os.environ.get("DATABASE_URL") or os.environ.get("DATABASE", str(ROOT / "data" / "adelinha.db")),
@@ -199,7 +200,11 @@ def create_app(test_config=None):
             raise RuntimeError('Banco de testes coincide com produção; inicialização bloqueada.')
         app.config.update(SITE_ENVIRONMENT='test', SESSION_COOKIE_NAME='ponto_coleta_teste',
             FASTFLOW_ENABLED='0', FASTFLOW_NEW_CHARGES_ENABLED='0', FASTFLOW_API_KEY='',
-            FASTFLOW_WEBHOOK_SECRET='', GOOGLE_LOGIN_ENABLED='0', GOOGLE_LOGIN_CLIENT_SECRET='')
+            FASTFLOW_WEBHOOK_SECRET='')
+        if not test_integration_enabled('GOOGLE_LOGIN', app.config):
+            app.config.update(GOOGLE_LOGIN_ENABLED='0', GOOGLE_LOGIN_CLIENT_SECRET='')
+        elif app.config.get('GOOGLE_LOGIN_REDIRECT_URI') != 'https://pontodecoletaadl.servehttp.com/cliente/google/retorno':
+            raise RuntimeError('Configure o retorno Google do domínio de testes.')
 
         @app.after_request
         def identify_test_environment(response):

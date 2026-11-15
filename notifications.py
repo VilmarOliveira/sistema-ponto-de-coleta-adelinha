@@ -1,5 +1,5 @@
 """Integrações HTTPS de notificação sem simular sucesso de entrega."""
-from environment_mode import is_test_environment
+from environment_mode import is_test_environment, test_integration_enabled
 import base64
 import json
 import os
@@ -18,15 +18,22 @@ GMAIL_DISPLAY_NAME = "Ponto de Coleta Adelinha"
 EMAIL_SIGNATURE = "ME GUARDE — COMPROU? DEIXA COM A GENTE."
 
 
+def _test_email_recipients():
+    return {value.strip().lower() for value in os.getenv('STAGING_EMAIL_RECIPIENTS', '').split(',') if value.strip()}
+
+
+def _test_email_enabled():
+    return test_integration_enabled('EMAIL') and bool(_test_email_recipients())
+
+
 def notification_config_status():
     """Retorna o estado da configuração sem expor segredos."""
-    if is_test_environment():
-        return {"email": False, "whatsapp": False}
     email_ready = all((os.getenv("GMAIL_CLIENT_ID", "").strip(), os.getenv("GMAIL_CLIENT_SECRET", "").strip(),
                        os.getenv("GMAIL_REFRESH_TOKEN", "").strip())) and os.getenv("GMAIL_SENDER", GMAIL_SENDER).strip().lower() == GMAIL_SENDER
     whatsapp_ready = all((os.getenv("WHATSAPP_ACCESS_TOKEN"), os.getenv("WHATSAPP_PHONE_NUMBER_ID"),
                           os.getenv("WHATSAPP_TEMPLATE_NAME"), os.getenv("WHATSAPP_GRAPH_VERSION")))
-    return {"email": bool(email_ready), "whatsapp": bool(whatsapp_ready)}
+    return {"email": bool(email_ready and (not is_test_environment() or _test_email_enabled())),
+            "whatsapp": bool(whatsapp_ready and not is_test_environment())}
 
 
 def normalize_whatsapp_destination(destination):
@@ -54,7 +61,7 @@ def _json_http_error(error, provider):
 
 
 def _gmail_access_token():
-    if is_test_environment():
+    if is_test_environment() and not _test_email_enabled():
         return None, "Envio real de e-mail desativado no ambiente de testes."
     client_id = os.getenv("GMAIL_CLIENT_ID", "").strip()
     client_secret = os.getenv("GMAIL_CLIENT_SECRET", "").strip()
@@ -102,8 +109,12 @@ def gmail_authorization_status():
 
 def send_email(destination, subject, body, *, html_body=None):
     """Envia pela Gmail API; sucesso significa aceitação pela API, não entrega."""
-    if is_test_environment():
+    if is_test_environment() and not _test_email_enabled():
         return False, "Envio real de e-mail desativado no ambiente de testes."
+    if is_test_environment():
+        if destination.strip().lower() not in _test_email_recipients():
+            return False, "Destinatário não autorizado para e-mails de testes."
+        subject = '[TESTES] ' + subject
     sender = os.getenv("GMAIL_SENDER", GMAIL_SENDER).strip().lower()
     if sender != GMAIL_SENDER:
         return False, f"Remetente Gmail inválido; configure {GMAIL_SENDER}"
