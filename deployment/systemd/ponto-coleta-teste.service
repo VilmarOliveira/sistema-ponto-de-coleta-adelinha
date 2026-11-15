@@ -1,0 +1,23 @@
+[Unit]
+Description=Ponto de Coleta Adelinha - Ambiente de Testes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/sistema-ponto-de-coleta-adelinha-teste
+EnvironmentFile=/etc/ponto-coleta/site-teste.env
+ExecStart=/home/ubuntu/sistema-ponto-de-coleta-adelinha-teste/.venv/bin/gunicorn --workers 1 --threads 2 --timeout 60 --bind 127.0.0.1:8001 app:create_app()
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+CPUQuota=50%
+MemoryMax=384M
+ReadOnlyPaths=/home/ubuntu/sistema-ponto-de-coleta-adelinha
+InaccessiblePaths=/etc/ponto-coleta/site.env /etc/ponto-coleta/site-producao.env /var/backups/ponto-coleta
+
+[Install]
+WantedBy=multi-user.target

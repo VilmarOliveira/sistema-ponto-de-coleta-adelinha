@@ -154,10 +154,13 @@ def terms_text():
 
 
 def create_app(test_config=None):
+    from environment_mode import is_test_environment, database_fingerprint
     app = Flask(__name__)
     from performance import install as install_asset_delivery
     install_asset_delivery(app)
     app.config.update(
+        SITE_ENVIRONMENT=os.environ.get("SITE_ENVIRONMENT", "production"),
+        STAGING_PRODUCTION_FINGERPRINT=os.environ.get("STAGING_PRODUCTION_FINGERPRINT", ""),
         SECRET_KEY=os.environ.get("SECRET_KEY", secrets.token_hex(32)),
         DATABASE=os.environ.get("DATABASE_URL") or os.environ.get("DATABASE", str(ROOT / "data" / "adelinha.db")),
         STAFF_USER=os.environ.get("STAFF_USER", "admin"),
@@ -187,6 +190,22 @@ def create_app(test_config=None):
     )
     if test_config:
         app.config.update(test_config)
+
+    if is_test_environment(app.config):
+        fingerprint = app.config['STAGING_PRODUCTION_FINGERPRINT']
+        if not fingerprint and not app.config.get('TESTING'):
+            raise RuntimeError('Configure a separação do banco de testes antes de iniciar.')
+        if fingerprint and fingerprint == database_fingerprint(app.config['DATABASE']):
+            raise RuntimeError('Banco de testes coincide com produção; inicialização bloqueada.')
+        app.config.update(SITE_ENVIRONMENT='test', SESSION_COOKIE_NAME='ponto_coleta_teste',
+            FASTFLOW_ENABLED='0', FASTFLOW_NEW_CHARGES_ENABLED='0', FASTFLOW_API_KEY='',
+            FASTFLOW_WEBHOOK_SECRET='', GOOGLE_LOGIN_ENABLED='0', GOOGLE_LOGIN_CLIENT_SECRET='')
+
+        @app.after_request
+        def identify_test_environment(response):
+            response.headers['X-Site-Environment'] = 'test'
+            response.headers['X-Robots-Tag'] = 'noindex, nofollow, noarchive'
+            return response
 
     def current_contract():
         return client_actions.current_contract(db(),(TERMS_VERSION,CONTRACT_LABEL,terms_text()))
@@ -1148,7 +1167,7 @@ def create_app(test_config=None):
         account = db().execute("SELECT id,name,email,password_hash,role,is_primary,active,session_version,deleted_at FROM staff_users WHERE LOWER(email)=?", (user,)).fetchone()
         valid_account = bool(account and account["active"] and not account["deleted_at"] and check_password_hash(account["password_hash"], request.form.get("password", "")))
         legacy_setting = db().execute("SELECT legacy_staff_active FROM settings WHERE id=1").fetchone()
-        valid_legacy = bool((not legacy_setting or legacy_setting["legacy_staff_active"]) and user == app.config["STAFF_USER"].lower() and check_password_hash(app.config["STAFF_PASSWORD_HASH"], request.form.get("password", "")))
+        valid_legacy = bool(not is_test_environment(app.config) and (not legacy_setting or legacy_setting["legacy_staff_active"]) and user == app.config["STAFF_USER"].lower() and check_password_hash(app.config["STAFF_PASSWORD_HASH"], request.form.get("password", "")))
         record_login("staff", user, valid_account or valid_legacy)
         if valid_account or valid_legacy:
             session.clear(); session["staff"] = account["email"] if valid_account else app.config["STAFF_USER"]
@@ -1898,7 +1917,7 @@ def create_app(test_config=None):
                 return {'error':'Há Pix Fast reservado para esses pacotes. Consulte ou cancele antes de mudar a modalidade.','payment_url':payment_url},400
         setting = db().execute("SELECT pix_receiver_name,pix_key,pix_key_type FROM settings WHERE id=1").fetchone()
         receiver = setting["pix_receiver_name"]
-        payload = pix_payload(setting["pix_key"], receiver, float(final_total)) if receiver and setting["pix_key_type"]=="CNPJ" and final_total > 0 else None
+        payload = pix_payload(setting["pix_key"], receiver, float(final_total)) if receiver and setting["pix_key_type"]=="CNPJ" and final_total > 0 and not is_test_environment(app.config) else None
         qr_data = qr_code_data_url(payload) if payload else None
         return {"fast_available":pickup_payments.fast_available(float(final_total)),"fast_range_message":pickup_payments.FAST_RANGE_MESSAGE,"package_coverage":[{"id":p["id"],"message":plan_service.coverage_description(db(),p),"late":fees(p)["late_fee"]} for p in packages],"payment_url":payment_url,"total": float(final_total), "package_total": package_total, "surcharge_amount": float(surcharge_amount),
             "original_total": float(original_total), "discount_amount": float(discount_amount),
@@ -2321,6 +2340,9 @@ def valid_document(document_type, number):
 
 
 def qr_code_data_url(payload):
+    from environment_mode import is_test_environment
+    if is_test_environment():
+        return None
     image = qrcode.make(payload)
     output = BytesIO()
     image.save(output, format="PNG")

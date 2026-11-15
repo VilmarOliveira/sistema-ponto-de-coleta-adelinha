@@ -4,6 +4,7 @@ No POST retries: the documented PIX API has no idempotency key. Exceptions never
 contain response bodies, request payloads, card numbers, CVV or credentials.
 """
 
+from environment_mode import is_test_environment
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import re
@@ -52,6 +53,8 @@ class Settings:
 
     @classmethod
     def from_config(cls, config):
+        if is_test_environment(config):
+            return cls("", "", config.get("FASTFLOW_PUBLIC_ORIGIN", ""), active=False, new_charges_enabled=False)
         return cls(
             config.get("FASTFLOW_API_KEY", "").strip(),
             config.get("FASTFLOW_WEBHOOK_SECRET", "").strip(),
@@ -138,6 +141,8 @@ class FastFlow:
         self.rate_guard = rate_guard
 
     def request(self, method, path, *, payload=None, params=None):
+        if is_test_environment():
+            raise GatewayError("Fast real desativada no ambiente de testes.", code="test_environment")
         if not self.settings.ready:
             raise GatewayError("Pix Fast não configurado.", code="not_configured")
         if self.rate_guard:
