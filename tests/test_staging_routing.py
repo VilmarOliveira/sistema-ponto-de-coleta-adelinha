@@ -53,7 +53,10 @@ def test_old_webhooks_remain_production_and_test_site_is_private(tmp_path):
         # The production vhost is independent and must remain public/unmodified.
         prod=f'''server {{ listen 127.0.0.1:{https} ssl; server_name www.pontodecoletaadelinha.com;
 ssl_certificate {crt}; ssl_certificate_key {key}; location / {{ proxy_pass http://127.0.0.1:{production}; }} }}'''
-        config=tmp_path/'nginx.conf'; config.write_text(f'pid {tmp_path}/nginx.pid; error_log {tmp_path}/error.log; events {{}} http {{ access_log off; {prod}\n{template}\n}}')
+        config=tmp_path/'nginx.conf'
+        active=f'pid {tmp_path}/nginx.pid; error_log {tmp_path}/error.log; events {{}} http {{ access_log off; {prod}\n{template}\n}}'
+        legacy=active.replace('auth_basic "Ambiente de testes Adelinha";','').replace('auth_basic_user_file '+str(auth)+';','').replace('http://127.0.0.1:'+str(test)+';','http://127.0.0.1:'+str(production)+';')
+        config.write_text(legacy)
         subprocess.run(['nginx','-t','-c',str(config),'-p',str(tmp_path)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         nginx=subprocess.Popen(['nginx','-c',str(config),'-p',str(tmp_path),'-g','daemon off;'],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         def request(host,path='/',body=None,secure=True,authenticated=False):
@@ -68,6 +71,10 @@ ssl_certificate {crt}; ssl_certificate_key {key}; location / {{ proxy_pass http:
                 with socket.create_connection(('127.0.0.1',https),timeout=.2):break
             except OSError:time.sleep(.1)
         host='pontodecoletaadl.servehttp.com'
+        assert request(host,'/health')[0]==200
+        config.write_text(active)
+        subprocess.run(['nginx','-s','reload','-c',str(config),'-p',str(tmp_path)],check=True,stderr=subprocess.DEVNULL)
+        proxy.wait_for_password(lambda:request(host,'/health')[0],attempts=40,delay=.05)
         assert request(host)[0]==401
         status,headers,body=request(host,authenticated=True)
         assert status==200 and json.loads(body)['backend']=='test'
@@ -81,22 +88,6 @@ ssl_certificate {crt}; ssl_certificate_key {key}; location / {{ proxy_pass http:
                 assert status==200 and payload=={'backend':'production','path':path,'method':'POST','body':'signed-fixture-body'}
         assert json.loads(request('www.pontodecoletaadelinha.com')[2])['backend']=='production'
 
-        # A real reload from the previous public vhost to the protected test vhost.
-        active=config.read_text()
-        legacy=active.replace('auth_basic "Ambiente de testes Adelinha";','').replace('auth_basic_user_file '+str(auth)+';','').replace('http://127.0.0.1:'+str(test)+';','http://127.0.0.1:'+str(production)+';')
-        config.write_text(legacy)
-        subprocess.run(['nginx','-s','reload','-c',str(config),'-p',str(tmp_path)],check=True,stderr=subprocess.DEVNULL)
-        for _ in range(50):
-            try:
-                if request(host,'/health')[0]==200:break
-            except (OSError,http.client.HTTPException):pass
-            time.sleep(.05)
-        assert request(host,'/health')[0]==200
-        config.write_text(active)
-        subprocess.run(['nginx','-s','reload','-c',str(config),'-p',str(tmp_path)],check=True,stderr=subprocess.DEVNULL)
-        proxy.wait_for_password(lambda:request(host,'/health')[0],attempts=40,delay=.05)
-        assert json.loads(request(host,authenticated=True)[2])['backend']=='test'
-        assert json.loads(request(host,'/webhooks/fastflow',body='after-reload')[2])['backend']=='production'
     finally:
         if nginx:
             nginx.terminate()

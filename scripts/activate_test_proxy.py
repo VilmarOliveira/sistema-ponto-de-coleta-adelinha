@@ -58,15 +58,18 @@ def password_status():
 def wait_for_password(probe=None, *, attempts=20, delay=.25):
     probe=probe or password_status
     last='sem resposta'
+    confirmed=0
     for attempt in range(attempts):
         try:
             status=probe()
             last='HTTP '+str(status)
-            if status==401:return
+            confirmed=confirmed+1 if status==401 else 0
+            if confirmed>=3:return
         except (OSError,http.client.HTTPException):
             last='sem resposta'
+            confirmed=0
         if attempt+1<attempts:time.sleep(delay)
-    raise RuntimeError('Proteção por senha não confirmada após aguardar a recarga (último resultado: '+last+').')
+    raise RuntimeError('Proteção por senha não confirmada de forma estável após aguardar a recarga (último resultado: '+last+').')
 
 
 def activate(config,template,backup_folder):

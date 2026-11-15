@@ -47,10 +47,10 @@ def test_old_hostname_is_not_activated_while_production_emails_use_it(tmp_path):
 
 
 def test_password_probe_waits_for_old_workers_to_retire(monkeypatch):
-    results=iter([200,200,401]);waits=[]
+    results=iter([200,401,200,401,401,401]);waits=[]
     monkeypatch.setattr(proxy.time,'sleep',waits.append)
-    proxy.wait_for_password(lambda:next(results),attempts=3,delay=.25)
-    assert waits==[.25,.25]
+    proxy.wait_for_password(lambda:next(results),attempts=6,delay=.25)
+    assert waits==[.25]*5
 
 
 def test_password_probe_retries_connection_errors_but_never_accepts_public_site(monkeypatch):
