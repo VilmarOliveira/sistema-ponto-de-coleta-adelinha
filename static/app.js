@@ -890,3 +890,22 @@ document.querySelectorAll('[data-regularization-email], [data-email-in-place]').
     } finally { button.disabled = false; }
   });
 });
+
+// Count down the server-calculated wait; the server still enforces the limit.
+document.querySelectorAll('[data-recovery-wait]').forEach((element) => {
+  const deadline = Date.now() + Number(element.dataset.recoveryWait) * 1000;
+  const update = () => {
+    const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    if (!remaining) {
+      element.parentElement.textContent = 'Você já pode solicitar um novo código.';
+      return false;
+    }
+    element.textContent = remaining >= 60
+      ? `${Math.floor(remaining / 60)} min e ${remaining % 60} s`
+      : `${remaining} segundos`;
+    return true;
+  };
+  if (update()) {
+    const timer = setInterval(() => { if (!update()) clearInterval(timer); }, 1000);
+  }
+});
