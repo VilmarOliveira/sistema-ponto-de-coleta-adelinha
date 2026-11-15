@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 import pytest
+from scripts import activate_test_proxy as proxy
 
 TOOLS=all(shutil.which(x) for x in ['nginx','openssl','htpasswd'])
 
@@ -79,6 +80,23 @@ ssl_certificate {crt}; ssl_certificate_key {key}; location / {{ proxy_pass http:
                 payload=json.loads(body)
                 assert status==200 and payload=={'backend':'production','path':path,'method':'POST','body':'signed-fixture-body'}
         assert json.loads(request('www.pontodecoletaadelinha.com')[2])['backend']=='production'
+
+        # A real reload from the previous public vhost to the protected test vhost.
+        active=config.read_text()
+        legacy=active.replace('auth_basic "Ambiente de testes Adelinha";','').replace('auth_basic_user_file '+str(auth)+';','').replace('http://127.0.0.1:'+str(test)+';','http://127.0.0.1:'+str(production)+';')
+        config.write_text(legacy)
+        subprocess.run(['nginx','-s','reload','-c',str(config),'-p',str(tmp_path)],check=True,stderr=subprocess.DEVNULL)
+        for _ in range(50):
+            try:
+                if request(host,'/health')[0]==200:break
+            except (OSError,http.client.HTTPException):pass
+            time.sleep(.05)
+        assert request(host,'/health')[0]==200
+        config.write_text(active)
+        subprocess.run(['nginx','-s','reload','-c',str(config),'-p',str(tmp_path)],check=True,stderr=subprocess.DEVNULL)
+        proxy.wait_for_password(lambda:request(host,'/health')[0],attempts=40,delay=.05)
+        assert json.loads(request(host,authenticated=True)[2])['backend']=='test'
+        assert json.loads(request(host,'/webhooks/fastflow',body='after-reload')[2])['backend']=='production'
     finally:
         if nginx:
             nginx.terminate()

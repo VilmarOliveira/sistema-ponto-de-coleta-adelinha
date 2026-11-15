@@ -9,6 +9,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.request import urlopen
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -44,6 +45,30 @@ def check_upstreams():
         if response.status!=200:raise RuntimeError('Confira a produção antes de alterar o proxy.')
 
 
+def password_status():
+    # New connection per attempt: retiring Nginx workers may still use the old vhost.
+    connection=http.client.HTTPSConnection('127.0.0.1',443,context=ssl._create_unverified_context(),timeout=2)
+    try:
+        connection.request('GET','/health',headers={'Host':'pontodecoletaadl.servehttp.com','Connection':'close'})
+        return connection.getresponse().status
+    finally:
+        connection.close()
+
+
+def wait_for_password(probe=None, *, attempts=20, delay=.25):
+    probe=probe or password_status
+    last='sem resposta'
+    for attempt in range(attempts):
+        try:
+            status=probe()
+            last='HTTP '+str(status)
+            if status==401:return
+        except (OSError,http.client.HTTPException):
+            last='sem resposta'
+        if attempt+1<attempts:time.sleep(delay)
+    raise RuntimeError('Proteção por senha não confirmada após aguardar a recarga (último resultado: '+last+').')
+
+
 def activate(config,template,backup_folder):
     config=Path(config).resolve();template=Path(template)
     before=config.read_bytes()
@@ -57,22 +82,26 @@ def activate(config,template,backup_folder):
     backup=backup_folder/('nginx-antes-teste-'+datetime.now().strftime('%Y%m%d-%H%M%S-%f')+'.conf')
     fd=os.open(backup,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
     with os.fdopen(fd,'wb') as file:file.write(before)
+    phase='gravação da configuração de testes'
     try:
         write_atomic(config,template.read_bytes(),config.stat().st_mode & 0o777)
+        phase='validação nginx -t'
         subprocess.run(['nginx','-t'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        phase='recarregamento do Nginx'
         subprocess.run(['systemctl','reload','nginx'],check=True)
-        connection=http.client.HTTPSConnection('127.0.0.1',443,context=ssl._create_unverified_context(),timeout=10)
-        try:
-            connection.request('GET','/',headers={'Host':'pontodecoletaadl.servehttp.com'})
-            response=connection.getresponse();status=response.status;response.read()
-        finally:connection.close()
-        if status!=401:raise RuntimeError('A proteção por senha não foi confirmada.')
+        phase='confirmação da proteção por senha'
+        wait_for_password()
+        phase='saúde dos serviços após a recarga'
         check_upstreams()
-    except Exception:
-        write_atomic(config,before,config.stat().st_mode & 0o777)
-        subprocess.run(['nginx','-t'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
-        subprocess.run(['systemctl','reload','nginx'],check=True)
-        raise RuntimeError('Ativação não concluída; configuração anterior do Nginx restaurada.') from None
+    except Exception as error:
+        reason=str(error) if isinstance(error,RuntimeError) else 'Falha na etapa: '+phase+'.'
+        try:
+            write_atomic(config,before,config.stat().st_mode & 0o777)
+            subprocess.run(['nginx','-t'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+            subprocess.run(['systemctl','reload','nginx'],check=True)
+        except Exception:
+            raise RuntimeError('Ativação falhou e restauração não foi confirmada. Backup: '+str(backup)+'. '+reason) from None
+        raise RuntimeError('Ativação não concluída; configuração anterior do Nginx restaurada. Motivo: '+reason) from None
     return backup
 
 
