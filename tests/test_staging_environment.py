@@ -110,3 +110,47 @@ def test_staging_disallows_legacy_staff_login(tmp_path):
     client.post('/login',data={'user':'fixture','password':'fixture-password','csrf_token':token(client)})
     with client.session_transaction() as session:
         assert not session.get('staff')
+
+
+def test_google_opt_in_keeps_payment_blocked_and_requires_test_callback(tmp_path):
+    config = {'TESTING': True, 'SITE_ENVIRONMENT': 'test',
+              'DATABASE': str(tmp_path/'google.db'), 'STAGING_GOOGLE_LOGIN_ENABLED': '1',
+              'GOOGLE_LOGIN_ENABLED': '1', 'GOOGLE_LOGIN_CLIENT_ID': 'test-client',
+              'GOOGLE_LOGIN_CLIENT_SECRET': 'test-secret',
+              'GOOGLE_LOGIN_REDIRECT_URI': 'https://pontodecoletaadl.servehttp.com/cliente/google/retorno'}
+    app = create_app(config)
+    from google_login import configuration
+    assert configuration(app.config)
+    assert app.config['FASTFLOW_ENABLED'] == '0'
+    config['GOOGLE_LOGIN_REDIRECT_URI'] = 'https://www.pontodecoletaadelinha.com/cliente/google/retorno'
+    with pytest.raises(RuntimeError, match='retorno Google'):
+        create_app(config)
+
+
+def test_email_opt_in_checks_recipient_before_network_and_marks_subject(monkeypatch):
+    import json, base64
+    from email import message_from_bytes
+    monkeypatch.setenv('SITE_ENVIRONMENT', 'test')
+    monkeypatch.setenv('STAGING_EMAIL_ENABLED', '1')
+    monkeypatch.setenv('STAGING_EMAIL_RECIPIENTS', 'owner@example.test')
+    monkeypatch.setattr(notifications, 'urlopen', deny)
+    assert not notifications.send_email('customer@example.test', 'subject', 'body')[0]
+    assert not notifications.send_email('owner@example.test,customer@example.test', 'subject', 'body')[0]
+    monkeypatch.setenv('STAGING_EMAIL_RECIPIENTS', '')
+    assert notifications._gmail_access_token()[0] is None
+    monkeypatch.setenv('STAGING_EMAIL_RECIPIENTS', 'owner@example.test')
+    monkeypatch.setattr(notifications, '_gmail_access_token', lambda: ('fake-token', None))
+    captured = []
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self): return b'{"id":"fixture"}'
+    def send(request, **kwargs):
+        captured.append(message_from_bytes(base64.urlsafe_b64decode(json.loads(request.data)['raw'])))
+        return Response()
+    monkeypatch.setattr(notifications, 'urlopen', send)
+    assert notifications.send_email('owner@example.test', 'subject', 'body')[0]
+    assert captured[0]['Subject'] == '[TESTES] subject'
+    assert captured[0]['To'] == 'owner@example.test'
+    assert not notifications._send_whatsapp('16999999999', '123456')[0]
