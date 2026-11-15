@@ -25,8 +25,10 @@ no aplicativo. O virtual host da produção não é modificado.
 Primeiro mesclar a PR e preparar develop a partir da versão aprovada. Não
 atualizar automaticamente a pasta de produção com commits ainda em testes.
 
-1. Na pasta existente, git pull --ff-only origin main. Não é necessário reiniciar
-   a produção apenas para disponibilizar os utilitários de instalação.
+1. Na pasta existente, git pull --ff-only origin main. Conferir no arquivo ativo
+   SITE_PUBLIC_ORIGIN=https://www.pontodecoletaadelinha.com e reiniciar a produção
+   após ajustar esse valor. Isso impede que lembretes de renovação levem usuários
+   reais ao domínio de testes. A ativação do proxy recusa origem pública antiga.
 2. Criar a configuração isolada, usando a cópia da configuração anterior à
    migração de banco, nunca o arquivo ativo como fonte dos dados de teste:
 

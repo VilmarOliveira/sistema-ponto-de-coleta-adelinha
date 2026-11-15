@@ -63,6 +63,7 @@ def test_production_defaults_are_preserved(tmp_path):
     app=create_app({'TESTING':True,'DATABASE':str(tmp_path/'prod.db'),
         'FASTFLOW_ENABLED':'1','FASTFLOW_API_KEY':'fixture','FASTFLOW_WEBHOOK_SECRET':'x'*40,
         'FASTFLOW_PUBLIC_ORIGIN':'https://example.test'})
+    assert app.config['SITE_PUBLIC_ORIGIN']=='https://www.pontodecoletaadelinha.com'
     assert app.config['FASTFLOW_ENABLED']=='1'
     assert app.config['SESSION_COOKIE_NAME']=='session'
     assert 'AMBIENTE DE TESTES' not in app.test_client().get('/').text

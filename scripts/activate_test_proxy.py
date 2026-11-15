@@ -3,6 +3,7 @@ import argparse
 from datetime import datetime
 import http.client
 import os
+import shlex
 from pathlib import Path
 import ssl
 import subprocess
@@ -23,6 +24,17 @@ def write_atomic(path,data,mode):
         if os.path.exists(temp):os.unlink(temp)
 
 
+def check_production_origin(path='/etc/ponto-coleta/site.env'):
+    values=[line.partition('=')[2].strip() for line in Path(path).read_text().splitlines()
+            if line.partition('=')[0].strip()=='SITE_PUBLIC_ORIGIN']
+    try:
+        parts=shlex.split(values[0]) if len(values)==1 else []
+    except ValueError:
+        parts=[]
+    if len(parts)!=1 or parts[0].rstrip('/')!='https://www.pontodecoletaadelinha.com':
+        raise RuntimeError('Configure SITE_PUBLIC_ORIGIN=https://www.pontodecoletaadelinha.com no arquivo ativo e reinicie a produção antes de liberar os testes.')
+
+
 def check_upstreams():
     subprocess.run(['systemctl','is-active','--quiet','ponto-coleta-teste.service'],check=True)
     with urlopen('http://127.0.0.1:8001/health',timeout=10) as response:
@@ -37,6 +49,7 @@ def activate(config,template,backup_folder):
     before=config.read_bytes()
     if b'pontodecoletaadl.servehttp.com' not in before or b'pontodecoletaadelinha.com' in before:
         raise RuntimeError('Arquivo contém outro domínio ou não é a configuração antiga. Nenhuma troca feita.')
+    check_production_origin()
     check_upstreams()
     if not Path('/etc/nginx/.htpasswd-ponto-coleta-teste').is_file():
         raise RuntimeError('Crie primeiro a senha de acesso ao ambiente de testes.')

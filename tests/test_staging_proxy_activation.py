@@ -18,6 +18,7 @@ def test_invalid_nginx_configuration_restores_original_file(tmp_path,monkeypatch
     config=tmp_path/'old.conf'; original=b'server_name pontodecoletaadl.servehttp.com; # original'
     config.write_bytes(original);template=tmp_path/'template.conf';template.write_bytes(b'invalid fixture configuration')
     monkeypatch.setattr(proxy,'check_upstreams',lambda:None)
+    monkeypatch.setattr(proxy,'check_production_origin',lambda:None)
     is_file=Path.is_file
     monkeypatch.setattr(Path,'is_file',lambda self:True if str(self)=='/etc/nginx/.htpasswd-ponto-coleta-teste' else is_file(self))
     calls=[]
@@ -32,3 +33,14 @@ def test_invalid_nginx_configuration_restores_original_file(tmp_path,monkeypatch
     assert len(backups)==1 and backups[0].read_bytes()==original
     assert backups[0].stat().st_mode & 0o777 == 0o600
     assert calls==[['nginx','-t'],['nginx','-t'],['systemctl','reload','nginx']]
+
+
+def test_old_hostname_is_not_activated_while_production_emails_use_it(tmp_path):
+    env=tmp_path/'production.env'
+    for value in ['', 'SITE_PUBLIC_ORIGIN=https://pontodecoletaadl.servehttp.com\n']:
+        env.write_text(value)
+        with pytest.raises(RuntimeError,match='SITE_PUBLIC_ORIGIN'):
+            proxy.check_production_origin(env)
+        assert env.read_text()==value
+    env.write_text('SITE_PUBLIC_ORIGIN="https://www.pontodecoletaadelinha.com/"\n')
+    proxy.check_production_origin(env)

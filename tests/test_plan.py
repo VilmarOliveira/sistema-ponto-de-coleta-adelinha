@@ -362,6 +362,8 @@ def test_reminders_twice_deduplicated_and_suppressed_after_renewal(site):
     assert (
         "R$ 33,90" in calls[0][0][2] and "Renovar meu plano" in calls[0][1]["html_body"]
     )
+    assert "https://www.pontodecoletaadelinha.com/cliente/plano" in calls[0][0][2]
+    assert "pontodecoletaadl.servehttp.com" not in calls[0][1]["html_body"]
     create_cycle(db, fake, day + timedelta(hours=1))
     assert reminders(db, app.config, day + timedelta(days=1), send) == 0
     assert db.execute("SELECT COUNT(*) n FROM plan_reminders").fetchone()["n"] == 1
