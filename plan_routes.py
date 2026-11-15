@@ -1,6 +1,7 @@
 """Client/admin plan screens and signed Fast callbacks; no PAN persistence."""
 
 import hashlib
+from environment_mode import is_test_environment
 import hmac
 import json
 import re
@@ -971,7 +972,7 @@ def install(
             .fetchone()
         )
         ai_code = None
-        if setting["pix_key_type"] == "CNPJ" and setting["pix_receiver_name"]:
+        if setting["pix_key_type"] == "CNPJ" and setting["pix_receiver_name"] and not is_test_environment(app.config):
             from core import pix_payload
 
             ai_code = pix_payload(

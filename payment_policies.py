@@ -7,6 +7,7 @@ from core import TZ
 from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
 from fastflow_gateway import Settings
 from core import pix_payload
+from environment_mode import is_test_environment
 
 SCOPES = {
     "advance": "Pagamento antecipado",
@@ -113,7 +114,7 @@ def select(db, app, scope, cents, configured=None, client_id=None):
 
 
 def local_code(db, method, cents):
-    if method != "Pix AI":
+    if is_test_environment() or method != "Pix AI":
         return None
     row = db.execute(
         "SELECT pix_key,pix_receiver_name FROM settings WHERE id=1"
