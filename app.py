@@ -1,3 +1,4 @@
+import offline
 from recovery_wait import recovery_wait_message
 import plan_service
 import plan_routes
@@ -2079,6 +2080,7 @@ def create_app(test_config=None):
     with app.app_context():
         if not init_db(app.config["DATABASE"]):
             app.config["FASTFLOW_ENABLED"] = "0"
+    offline.install(app, db, login_required, current_staff, now)
     payment_policies.install(app,db,admin_required,current_staff)
     blog_tools.install(app,db,admin_required,current_staff,now,format_blog_body,validated_image_type)
     install_google_login(app, db, login_blocked, record_login)
@@ -2310,6 +2312,7 @@ def init_db(database):
                 ("fresh_pix_fast_v1", datetime.now(TZ).isoformat()),
             )
             marker = True
+    offline.init_schema(connection)
     connection.commit()
     connection.close()
     return bool(marker)
