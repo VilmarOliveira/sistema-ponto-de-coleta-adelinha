@@ -33,7 +33,9 @@
  }
  async function save(next,initial=false) {
   const iv=crypto.getRandomValues(new Uint8Array(12));
-  const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:encoder.encode(envelope.scope)},key,encoder.encode(JSON.stringify(next)));
+  const encoded=encoder.encode(JSON.stringify(next));
+  if(encoded.byteLength>12*1024*1024)throw new Error('A base local atingiu o limite. Faça backup, sincronize e confira os registros antes de continuar.');
+  const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:encoder.encode(envelope.scope)},key,encoded);
   const row={...envelope,iv:bytesTo64(iv),cipher:bytesTo64(new Uint8Array(cipher)),revision:crypto.randomUUID()};
   const previous=envelope.revision;
   await transaction('readwrite',(s,set,abort)=>{
@@ -68,9 +70,10 @@
   finally{busy=false;document.querySelectorAll('button').forEach(x=>x.disabled=false);}
  }
  async function api(path,form=null) {
-  let response;
-  try{response=await fetch('/offline/api/'+path,{method:form?'POST':'GET',body:form,credentials:'same-origin',cache:'no-store',redirect:'error',headers:{Accept:'application/json'}});}
+  let response;const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),15000);
+  try{response=await fetch('/offline/api/'+path,{method:form?'POST':'GET',body:form,credentials:'same-origin',cache:'no-store',redirect:'error',signal:controller.signal,headers:{Accept:'application/json'}});}
   catch(_){throw new Error('Sem conexão ou sessão expirada. Seus registros continuam salvos. Entre novamente na Área do Ponto e tente sincronizar.');}
+  finally{clearTimeout(timeout);}
   if(!response.headers.get('content-type')?.includes('application/json'))throw new Error('Entre novamente na Área do Ponto para continuar online.');
   const result=await response.json();if(!response.ok)throw new Error(result.error||'Confira sua sessão e permissões na Área do Ponto.');
   return result;
