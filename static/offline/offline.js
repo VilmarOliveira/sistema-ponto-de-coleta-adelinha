@@ -149,7 +149,7 @@
    if(op.reason){const reason=document.createElement('p');reason.textContent=op.reason;entry.append(reason);}
    if(op.state==='local'){const p=document.createElement('p');p.textContent='Salvo somente neste aparelho. Faça backup e sincronize quando houver conexão.';entry.append(p);}
    if(['review','conflict'].includes(op.state)){
-    const explanation=document.createElement('p');explanation.textContent='Após concluir e conferir a operação no fluxo online, informe o código do cliente (CLTPCA), pacote (PCTPCA) ou comprovante (CMPPCA). O vínculo não cria nem cobra novamente.';
+    const explanation=document.createElement('p');explanation.textContent='Após concluir e conferir a operação no fluxo online, informe o código do cliente (CLIPCA), pacote (PCTPCA) ou comprovante (CMPPCA). O vínculo não cria nem cobra novamente.';
     const form=document.createElement('form'),label1=document.createElement('label'),label2=document.createElement('label'),target=document.createElement('input'),note=document.createElement('input'),button=document.createElement('button');
     label1.textContent='Código online';target.name='target';target.required=true;target.maxLength=30;label1.append(target);
     label2.textContent='Observação da conferência';note.name='note';note.required=true;note.maxLength=1000;label2.append(note);

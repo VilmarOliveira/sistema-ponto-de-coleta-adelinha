@@ -16,7 +16,7 @@ do servidor.
 4. Sem conexão, desbloquear com a senha local. Cadastrar clientes provisórios,
    receber pacotes ou registrar retiradas com documento, assinatura e valor
    manualmente conferido. Os identificadores OFF são temporários e não substituem
-   os códigos oficiais CLTPCA, PCTPCA e CMPPCA.
+   os códigos oficiais CLIPCA, PCTPCA e CMPPCA.
 5. Baixar um backup protegido ao concluir o atendimento. Guardar arquivo e senha
    em locais separados. O backup não contém a senha e não pode ser aberto sem ela.
 6. Com conexão restabelecida, entrar online com o mesmo operador/ambiente, voltar

@@ -300,7 +300,7 @@ def install(app, db, login_required, current_staff, now):
             oid=uuid_value(request.form.get('id'))
             target_code=request.form.get('target','').strip().upper()
             note=request.form.get('note','').strip()
-            if not re.fullmatch(r'(?:CLTPCA-|PCTPCA-|CMPPCA-)?[0-9]{1,12}',target_code) or len(note)>1000 or not note:
+            if not re.fullmatch(r'(?:CLIPCA-|CLTPCA-|PCTPCA-|CMPPCA-)?[0-9]{1,12}',target_code) or len(note)>1000 or not note:
                 raise ValueError('Informe o código do registro online e a observação da conferência.')
         except (ValueError,TypeError) as error:
             return jsonify(error=str(error)),400

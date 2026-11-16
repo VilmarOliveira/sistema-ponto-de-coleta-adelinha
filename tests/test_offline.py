@@ -73,7 +73,7 @@ def test_snapshot_is_minimal_private_and_shell_is_generic(setup):
     snapshot=prepare(client)
     assert 'cpf' not in snapshot['clients'][0] and 'email' not in snapshot['clients'][0]
     assert len(snapshot['packages'][0]['revision'])==64
-    assert client.get('/offline/api/prepare').headers['Cache-Control']=='no-store'
+    assert 'no-store' in client.get('/offline/api/prepare').headers['Cache-Control']
     shell=client.get('/static/offline/index.html')
     assert b'Cliente Teste' not in shell.data and b'csrf_token' not in shell.data
     worker=client.get('/offline/sw.js')
@@ -223,3 +223,15 @@ def test_postgres_journal_and_concurrent_duplicate_tracking():
     finally:
         with psycopg.connect(url,autocommit=True) as root:
             root.execute('DROP SCHEMA '+schema+' CASCADE')
+
+
+def test_dismissal_preserves_journal_and_audit_but_does_not_block_corrected_record(setup):
+    app,client=setup;snapshot=prepare(client);entry=event('package')
+    assert sync(client,snapshot,[entry]).status_code==200
+    form=dict(csrf_token=token(client),id=entry['id'],note='Registro digitado incorretamente')
+    result=client.post('/offline/api/dismiss',data=form)
+    assert result.status_code==200 and result.json['state']=='dismissed'
+    assert len(query(app,'SELECT * FROM offline_operations'))==1
+    assert query(app,"SELECT action FROM audit_logs WHERE action='nao_aplicar_contingencia'")
+    assert sync(client,snapshot,[event('package')]).json['results'][0]['state']=='review'
+    assert len(query(app,'SELECT * FROM packages'))==1

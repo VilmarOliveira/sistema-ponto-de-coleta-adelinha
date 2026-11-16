@@ -10,6 +10,6 @@ self.addEventListener('fetch',event=>{
  if(ASSETS.includes(url.pathname)){
   event.respondWith(caches.match(url.pathname).then(cached=>cached||fetch(event.request)));
  }else if(event.request.mode==='navigate'&&url.pathname==='/offline/'){
-  event.respondWith(fetch(event.request).catch(()=>caches.match(SHELL)));
+  event.respondWith(fetch(event.request).then(response=>response.status>=500?caches.match(SHELL):response).catch(()=>caches.match(SHELL)));
  }
 });
