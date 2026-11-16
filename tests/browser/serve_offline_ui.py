@@ -26,7 +26,7 @@ def simulate_unavailable():
         return 'Synthetic server unavailable',503
 
 @app.get('/__offline_fixture__')
-def login():
+def offline_fixture_login():
     session.clear();session.update(staff='Operador Fictício',staff_user_id=1,staff_session_version=1,csrf_token='offline-fixture')
     return redirect('/offline/')
 if __name__=='__main__':
