@@ -1,3 +1,4 @@
+from recovery_wait import recovery_wait_message
 import plan_service
 import plan_routes
 import pickup_payments
@@ -856,9 +857,9 @@ def create_app(test_config=None):
             flash("Ative a conta e cadastre um e-mail antes de iniciar a recuperação.","error")
             return users_redirect("clientes")
         cutoff=(now()-timedelta(minutes=15)).isoformat()
-        recent=db().execute("SELECT COUNT(id) total,MAX(created_at) latest FROM verification_codes WHERE client_id=? AND purpose='password_recovery' AND created_at>=?",(client_id,cutoff)).fetchone()
+        recent=db().execute("SELECT COUNT(id) total,MAX(created_at) latest,MIN(created_at) earliest FROM verification_codes WHERE client_id=? AND purpose='password_recovery' AND created_at>=?",(client_id,cutoff)).fetchone()
         if recent["total"]>=3 or (recent["latest"] and now()-datetime.fromisoformat(recent["latest"])<timedelta(seconds=60)):
-            flash("Aguarde antes de solicitar um novo código.","error"); return users_redirect("clientes")
+            flash(recovery_wait_message(recent, now()),"error"); return users_redirect("clientes")
         code=f"{secrets.randbelow(1000000):06d}"; created=now().isoformat()
         sent,detail=send_code("email",client["email"],code)
         db().execute("INSERT INTO verification_codes(client_id,purpose,channel,destination,code_hash,expires_at,attempts,sends,provider_status,created_at,used_at) VALUES(?,?,?,?,?,?,0,1,?,?,?)",
@@ -911,9 +912,9 @@ def create_app(test_config=None):
     def staff_user_recovery(user_id):
         account=db().execute("SELECT id,email FROM staff_users WHERE id=? AND active=1 AND deleted_at IS NULL",(user_id,)).fetchone()
         if not account: abort(404)
-        cutoff=(now()-timedelta(minutes=15)).isoformat(); recent=db().execute("SELECT COUNT(id) total,MAX(created_at) latest FROM staff_recovery_codes WHERE staff_user_id=? AND created_at>=?",(user_id,cutoff)).fetchone()
+        cutoff=(now()-timedelta(minutes=15)).isoformat(); recent=db().execute("SELECT COUNT(id) total,MAX(created_at) latest,MIN(created_at) earliest FROM staff_recovery_codes WHERE staff_user_id=? AND created_at>=?",(user_id,cutoff)).fetchone()
         if recent["total"]>=3 or (recent["latest"] and now()-datetime.fromisoformat(recent["latest"])<timedelta(seconds=60)):
-            flash("Aguarde antes de solicitar um novo código.","error"); return users_redirect("equipe")
+            flash(recovery_wait_message(recent, now()),"error"); return users_redirect("equipe")
         code=f"{secrets.randbelow(1000000):06d}"; created=now().isoformat(); sent,detail=send_code("email",account["email"],code)
         db().execute("INSERT INTO staff_recovery_codes(staff_user_id,code_hash,expires_at,provider_status,created_at,used_at) VALUES(?,?,?,?,?,?)",(account["id"],hashlib.sha256(code.encode()).hexdigest(),(now()+timedelta(minutes=10)).isoformat(),detail,created,None if sent else created)); db().commit()
         flash("O Gmail aceitou o envio do código." if sent else f"Não foi possível enviar o código. {detail}.","success" if sent else "error")
@@ -1190,9 +1191,9 @@ def create_app(test_config=None):
             email=request.form.get("email","").strip().lower(); account=db().execute("SELECT id,email FROM staff_users WHERE LOWER(email)=? AND active=1 AND deleted_at IS NULL",(email,)).fetchone()
             if not account:
                 flash("Se o e-mail estiver cadastrado, enviaremos as instruções.","success"); return render_template("staff_password_recovery.html",stage="confirm")
-            cutoff=(now()-timedelta(minutes=15)).isoformat(); recent=db().execute("SELECT COUNT(id) total,MAX(created_at) latest FROM staff_recovery_codes WHERE staff_user_id=? AND created_at>=?",(account["id"],cutoff)).fetchone()
+            cutoff=(now()-timedelta(minutes=15)).isoformat(); recent=db().execute("SELECT COUNT(id) total,MAX(created_at) latest,MIN(created_at) earliest FROM staff_recovery_codes WHERE staff_user_id=? AND created_at>=?",(account["id"],cutoff)).fetchone()
             if recent["total"]>=3 or (recent["latest"] and now()-datetime.fromisoformat(recent["latest"])<timedelta(seconds=60)):
-                flash("Aguarde antes de solicitar um novo código.","error"); return render_template("staff_password_recovery.html",stage="request"),429
+                flash(recovery_wait_message(recent, now()),"error"); return render_template("staff_password_recovery.html",stage="request"),429
             code=f"{secrets.randbelow(1000000):06d}"; created=now().isoformat(); sent,detail=send_code("email",account["email"],code)
             cur=db().execute("INSERT INTO staff_recovery_codes(staff_user_id,code_hash,expires_at,provider_status,created_at,used_at) VALUES(?,?,?,?,?,?) RETURNING id",(account["id"],hashlib.sha256(code.encode()).hexdigest(),(now()+timedelta(minutes=10)).isoformat(),detail,created,None if sent else created)); code_id=cur.fetchone()["id"]; db().commit()
             if not sent: flash(f"Não foi possível enviar o código. {detail}.","error"); return render_template("staff_password_recovery.html",stage="request"),503
@@ -1235,9 +1236,9 @@ def create_app(test_config=None):
                 flash("Este cadastro não possui e-mail disponível. Procure a equipe para atualizar o endereço de e-mail.", "error")
                 return render_template("password_recovery.html", stage="request", entered_cpf=request.form.get("cpf", "")), 400
             cutoff = (now() - timedelta(minutes=15)).isoformat()
-            recent = db().execute("SELECT COUNT(id) AS total,MAX(created_at) latest FROM verification_codes WHERE client_id=? AND purpose='password_recovery' AND created_at>=?", (client["id"], cutoff)).fetchone()
+            recent = db().execute("SELECT COUNT(id) AS total,MAX(created_at) latest,MIN(created_at) earliest FROM verification_codes WHERE client_id=? AND purpose='password_recovery' AND created_at>=?", (client["id"], cutoff)).fetchone()
             if recent["total"] >= 3 or (recent["latest"] and now()-datetime.fromisoformat(recent["latest"])<timedelta(seconds=60)):
-                flash("Aguarde antes de solicitar um novo código.", "error")
+                flash(recovery_wait_message(recent, now()), "error")
                 return render_template("password_recovery.html", stage="request", entered_cpf=request.form.get("cpf", "")), 429
             code = f"{secrets.randbelow(1000000):06d}"
             created_at, expires = now().isoformat(), (now() + timedelta(minutes=10)).isoformat()
