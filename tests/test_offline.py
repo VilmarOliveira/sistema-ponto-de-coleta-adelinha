@@ -235,3 +235,23 @@ def test_dismissal_preserves_journal_and_audit_but_does_not_block_corrected_reco
     assert query(app,"SELECT action FROM audit_logs WHERE action='nao_aplicar_contingencia'")
     assert sync(client,snapshot,[event('package')]).json['results'][0]['state']=='review'
     assert len(query(app,'SELECT * FROM packages'))==1
+
+
+def test_duplicate_client_drafts_can_resolve_to_same_canonical_client(setup):
+    app,client=setup;snapshot=prepare(client)
+    entries=[event(),event()]
+    assert sync(client,snapshot,entries).status_code==200
+    public=query(app,'SELECT public_id FROM clients WHERE id=1')[0]['public_id']
+    for entry in entries:
+        response=client.post('/offline/api/reconcile',data=dict(csrf_token=token(client),id=entry['id'],target=public,note='Mesmo CPF; cadastro conferido'))
+        assert response.status_code==200,response.text
+    assert len(query(app,"SELECT id FROM offline_operations WHERE state='linked'"))==2
+    assert len(query(app,'SELECT * FROM clients'))==1
+
+
+def test_changed_package_price_requires_review(setup):
+    app,client=setup;snapshot=prepare(client)
+    entry=event('pickup',revisions={'srv:1':snapshot['packages'][0]['revision']})
+    db=DatabaseConnection(app.config['DATABASE']);db.execute('UPDATE packages SET base_price=9.9 WHERE id=1');db.commit();db.close()
+    response=sync(client,snapshot,[entry])
+    assert response.json['results'][0]['state']=='conflict'

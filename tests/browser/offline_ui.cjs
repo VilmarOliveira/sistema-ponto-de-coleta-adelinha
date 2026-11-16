@@ -44,7 +44,7 @@ const {chromium}=require('playwright');
  await page.locator('#pickup-form [name="amount"]').fill('4.90');
  const box=await page.locator('#signature').boundingBox();
  await page.mouse.move(box.x+20,box.y+60);await page.mouse.down();await page.mouse.move(box.x+160,box.y+80,{steps:12});await page.mouse.up();
- await page.locator('#pickup-form .check input').check();
+ await page.locator('#confirm-pickup').check();
  await page.locator('#pickup-form button.primary').click();
  await page.waitForFunction(()=>document.querySelector('#pending-count').textContent==='3');
  assert.equal(await page.locator('#pickup-packages input').count(),0);

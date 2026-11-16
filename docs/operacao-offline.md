@@ -24,8 +24,9 @@ do servidor.
 7. Abrir cada registro em Registros e conferência. Consultar os conflitos, concluir
    ou localizar a operação no fluxo online normal e vincular seu código oficial.
    O vínculo verifica correspondência do cliente, rastreio/cliente do pacote, ou
-   documento, conjunto de pacotes e valor da retirada. O mesmo registro online não
-   pode ser vinculado duas vezes.
+   documento, conjunto de pacotes e valor da retirada. O mesmo pacote ou comprovante online não
+   pode ser vinculado duas vezes. Pré-cadastros duplicados podem apontar ao mesmo
+   cliente validado, preservando as referências dos pacotes.
 8. Se o registro local estiver incorreto ou duplicado, informar o motivo e usar
    Não aplicar registro incorreto ou duplicado. O histórico permanece no servidor
    e nenhum dado operacional online é alterado.

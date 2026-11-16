@@ -25,12 +25,12 @@ def init_schema(db):
     db.execute("CREATE INDEX IF NOT EXISTS idx_offline_ref ON offline_operation_refs(ref)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_offline_operator ON offline_operations(operator_id,received_at)")
     db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_offline_link
-        ON offline_operations(linked_type,linked_id) WHERE linked_id IS NOT NULL""")
+        ON offline_operations(linked_type,linked_id) WHERE linked_id IS NOT NULL AND linked_type IN ('package','pickup')""")
 
 
 def package_revision(row):
     return hashlib.sha256(json.dumps(
-        {k: row[k] for k in ('id','client_id','tracking','status','notified_at','picked_at')},
+        {k: row[k] for k in ('id','client_id','tracking','status','notified_at','picked_at','width','height','length','weight','category','base_price','shelf','created_at')},
         sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -206,7 +206,7 @@ def install(app, db, login_required, current_staff, now):
     @authorized
     def prepare(staff):
         clients = db().execute('SELECT id,public_id,name,phone FROM clients WHERE active=1 ORDER BY id LIMIT 10001').fetchall()
-        packages = db().execute("""SELECT id,public_id,client_id,tracking,category,base_price,status,created_at,notified_at,picked_at,shelf
+        packages = db().execute("""SELECT id,public_id,client_id,tracking,category,base_price,status,created_at,notified_at,picked_at,shelf,width,height,length,weight
             FROM packages WHERE status!='retirado' ORDER BY id LIMIT 10001""").fetchall()
         if len(clients)>10000 or len(packages)>10000:
             return jsonify(error='Base muito grande para esta preparação. Solicite preparação por seleção.'),409
@@ -345,7 +345,7 @@ def install(app, db, login_required, current_staff, now):
                 connection.rollback()
                 return jsonify(error='O registro online não corresponde aos dados locais. Conclua ou confira a operação no fluxo normal antes de vincular.'),409
             exists=connection.execute('SELECT id FROM offline_operations WHERE linked_type=? AND linked_id=?',(kind,target)).fetchone()
-            if exists:
+            if exists and kind!='client':
                 connection.rollback()
                 return jsonify(error='Este registro online já está vinculado a uma contingência. Confira duplicidade.'),409
             connection.execute("""UPDATE offline_operations SET state='linked',linked_type=?,linked_id=?,
