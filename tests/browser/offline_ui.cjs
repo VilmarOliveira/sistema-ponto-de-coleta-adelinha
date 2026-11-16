@@ -2,11 +2,12 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');
 const path=require('node:path');
 const {chromium}=require('playwright');
+let diagnosticPage;
 (async()=>{
  const out=process.env.OFFLINE_OUTPUT||'/tmp/offline-ui-results';await fs.mkdir(out,{recursive:true});
  const browser=await chromium.launch({headless:true});
  const context=await browser.newContext({acceptDownloads:true,viewport:{width:1280,height:900}});
- const page=await context.newPage(),errors=[];
+ const page=await context.newPage(),errors=[];diagnosticPage=page;
  page.on('pageerror',error=>errors.push(error.message));
  const origin='http://127.0.0.1:5096',password='offline-fixture-password';
  await page.goto(origin+'/__offline_fixture__');
@@ -42,6 +43,7 @@ const {chromium}=require('playwright');
  await page.locator('#pickup-form [name="receiver_name"]').fill('Cliente Fictício Offline');
  await page.locator('#pickup-form [name="document"]').fill('52998224725');
  await page.locator('#pickup-form [name="amount"]').fill('4.90');
+ await page.locator('#signature').scrollIntoViewIfNeeded();
  const box=await page.locator('#signature').boundingBox();
  await page.mouse.move(box.x+20,box.y+60);await page.mouse.down();await page.mouse.move(box.x+160,box.y+80,{steps:12});await page.mouse.up();
  await page.locator('#confirm-pickup').check();
@@ -88,4 +90,14 @@ const {chromium}=require('playwright');
  await stale.waitForFunction(()=>document.querySelector('#message').textContent.includes('outra aba'));
  assert.deepEqual(errors,[]);
  await browser.close();console.log('Offline reload, encrypted storage, wrong password, physical operations, backup restore, expired session, idempotent sync, stale tabs and responsive widths passed.');
-})().catch(error=>{console.error(error);process.exit(1);});
+})().catch(async error=>{
+ console.error(error);
+ if(diagnosticPage){
+  try{console.error('Offline diagnostic:',await diagnosticPage.evaluate(()=>({
+   message:document.querySelector('#message')?.textContent,
+   pending:document.querySelector('#pending-count')?.textContent,
+   invalid:[...document.querySelectorAll('input:invalid,select:invalid,textarea:invalid')].map(x=>({name:x.name,id:x.id,message:x.validationMessage}))
+  })));}catch(_){}
+ }
+ process.exit(1);
+});
