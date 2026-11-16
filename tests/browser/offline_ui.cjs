@@ -1,0 +1,103 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+const path=require('node:path');
+const {chromium}=require('playwright');
+let diagnosticPage;
+(async()=>{
+ const out=process.env.OFFLINE_OUTPUT||'/tmp/offline-ui-results';await fs.mkdir(out,{recursive:true});
+ const browser=await chromium.launch({headless:true});
+ const context=await browser.newContext({acceptDownloads:true,viewport:{width:1280,height:900}});
+ const page=await context.newPage(),errors=[];diagnosticPage=page;
+ page.on('pageerror',error=>errors.push(error.message));
+ const origin='http://127.0.0.1:5096',password='offline-fixture-password';
+ await page.goto(origin+'/__offline_fixture__');
+ await page.locator('#new-password').fill(password);await page.locator('#repeat-password').fill(password);
+ await page.locator('#prepare-form button').click();
+ await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('Aparelho preparado'),{timeout:30000});
+ await page.waitForFunction(()=>!!navigator.serviceWorker.controller);
+ const encrypted=await page.evaluate(()=>new Promise((resolve,reject)=>{const request=indexedDB.open('adelinha-contingency-v1',1);request.onsuccess=()=>{const get=request.result.transaction('vault').objectStore('vault').get('current');get.onsuccess=()=>resolve(get.result);get.onerror=()=>reject(get.error);};}));
+ assert.equal(encrypted.version,1);assert.ok(encrypted.cipher);
+ assert.ok(!JSON.stringify(encrypted).includes('Cliente Teste'));
+ await page.goto(origin+'/offline/?fixture_unavailable=1');
+ await page.locator('#unlock-password').waitFor();
+ await context.setOffline(true);
+ await page.goto(origin+'/offline/');
+ await page.locator('#unlock-password').fill('wrong-password');await page.locator('#unlock-form button').click();
+ await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('Senha local incorreta'));
+ assert.equal(await page.locator('#workspace').isVisible(),false);
+ await page.locator('#unlock-password').fill(password);await page.locator('#unlock-form button').click();
+ await page.waitForFunction(()=>!document.querySelector('#workspace').hidden);
+ await page.locator('[data-tab="client"]').click();
+ await page.locator('#client-form [name="name"]').fill('Cliente Fictício Offline');
+ await page.locator('#client-form [name="phone"]').fill('00000000000');
+ await page.locator('#client-form button').click();
+ await page.waitForFunction(()=>document.querySelector('#pending-count').textContent==='1');
+ await page.locator('[data-tab="package"]').click();
+ const clientRef=await page.locator('#package-client option').evaluateAll(options=>options.find(x=>x.textContent.includes('Cliente Fictício Offline')).value);
+ await page.locator('#package-client').selectOption(clientRef);
+ for(const [field,value] of Object.entries({tracking:'OFFLINEFIXTURE0001',shelf:'A1',width:'10',height:'10',length:'10',weight:'1'}))await page.locator('#package-form [name="'+field+'"]').fill(value);
+ await page.locator('#package-form button').click();
+ await page.waitForFunction(()=>document.querySelector('#pending-count').textContent==='2');
+ await page.locator('[data-tab="pickup"]').click();await page.locator('#pickup-client').selectOption(clientRef);
+ await page.locator('#pickup-packages input').check();
+ await page.locator('#pickup-form [name="receiver_name"]').fill('Cliente Fictício Offline');
+ await page.locator('#pickup-form [name="document"]').fill('52998224725');
+ await page.locator('#pickup-form [name="amount"]').fill('4.90');
+ await page.locator('#signature').scrollIntoViewIfNeeded();
+ const box=await page.locator('#signature').boundingBox();
+ await page.mouse.move(box.x+20,box.y+60);await page.mouse.down();await page.mouse.move(box.x+160,box.y+80,{steps:12});await page.mouse.up();
+ await page.locator('#confirm-pickup').check();
+ await page.locator('#pickup-form button.primary').click();
+ await page.waitForFunction(()=>document.querySelector('#pending-count').textContent==='3');
+ assert.equal(await page.locator('#pickup-packages input').count(),0);
+ const downloadPromise=page.waitForEvent('download');await page.locator('#export').click();
+ const download=await downloadPromise;const backupPath=path.join(out,'encrypted-backup-fixture.json');await download.saveAs(backupPath);
+ const backup=await fs.readFile(backupPath,'utf8');assert.ok(!backup.includes('Cliente Fictício Offline'));
+ await page.reload();await page.locator('#unlock-password').fill(password);await page.locator('#unlock-form button').click();
+ await page.waitForFunction(()=>document.querySelector('#pending-count').textContent==='3');
+ await context.setOffline(false);
+ await context.clearCookies();await page.locator('#sync').click();
+ await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('sessão')||document.querySelector('#message').textContent.includes('Entre novamente'));
+ assert.equal(await page.locator('#pending-count').textContent(),'3');
+ const loginPage=await context.newPage();await loginPage.goto(origin+'/__offline_fixture__');await loginPage.close();
+ await page.locator('#sync').click();
+ await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('3 registros enviados'));
+ assert.equal(await page.locator('#pending-count').textContent(),'0');
+ assert.equal(await page.locator('#review-count').textContent(),'3');
+ const inbox=await page.evaluate(async()=>{const response=await fetch('/offline/api/inbox');return response.json();});
+ assert.equal(inbox.items.length,3);
+ const restoredContext=await browser.newContext();const restored=await restoredContext.newPage();
+ await restored.goto(origin+'/__offline_fixture__');await restored.locator('#restore').setInputFiles(backupPath);
+ await restored.waitForFunction(()=>document.querySelector('#message').textContent.includes('Backup restaurado'));
+ await restoredContext.setOffline(true);await restored.reload();
+ await restored.locator('#unlock-password').fill(password);await restored.locator('#unlock-form button').click();
+ await restored.waitForFunction(()=>document.querySelector('#pending-count').textContent==='3');
+ await restoredContext.setOffline(false);
+ await restored.locator('#sync').click();
+ await restored.waitForFunction(()=>document.querySelector('#pending-count').textContent==='0');
+ const after=await restored.evaluate(async()=>{const response=await fetch('/offline/api/inbox');return response.json();});assert.equal(after.items.length,3);
+ for(const width of [360,768,1280]){
+  await page.setViewportSize({width,height:1000});await page.locator('[data-tab="records"]').click();
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Horizontal overflow '+width);
+  await page.screenshot({path:path.join(out,'offline-'+width+'.png'),fullPage:true});
+ }
+ // A stale tab cannot overwrite a newer encrypted journal.
+ const stale=await context.newPage();await stale.goto(origin+'/offline/');await stale.locator('#unlock-password').fill(password);await stale.locator('#unlock-form button').click();
+ await stale.waitForFunction(()=>!document.querySelector('#workspace').hidden);
+ await page.locator('[data-tab="client"]').click();await page.locator('#client-form [name="name"]').fill('New local record');await page.locator('#client-form [name="phone"]').fill('00000000000');await page.locator('#client-form button').click();
+ await page.waitForFunction(()=>document.querySelector('#pending-count').textContent==='1');
+ await stale.locator('[data-tab="client"]').click();await stale.locator('#client-form [name="name"]').fill('Stale record');await stale.locator('#client-form [name="phone"]').fill('00000000000');await stale.locator('#client-form button').click();
+ await stale.waitForFunction(()=>document.querySelector('#message').textContent.includes('outra aba'));
+ assert.deepEqual(errors,[]);
+ await browser.close();console.log('Offline reload, encrypted storage, wrong password, physical operations, backup restore, expired session, idempotent sync, stale tabs and responsive widths passed.');
+})().catch(async error=>{
+ console.error(error);
+ if(diagnosticPage){
+  try{console.error('Offline diagnostic:',await diagnosticPage.evaluate(()=>({
+   message:document.querySelector('#message')?.textContent,
+   pending:document.querySelector('#pending-count')?.textContent,
+   invalid:[...document.querySelectorAll('input:invalid,select:invalid,textarea:invalid')].map(x=>({name:x.name,id:x.id,message:x.validationMessage}))
+  })));}catch(_){}
+ }
+ process.exit(1);
+});
