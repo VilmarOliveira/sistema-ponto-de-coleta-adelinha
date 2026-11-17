@@ -170,3 +170,11 @@ def test_preparation_query_count_does_not_grow_with_client_count(monkeypatch,set
     db.commit();db.close();calls.clear()
     assert len(prepare(client)['clients'])==21
     assert len(calls)==baseline
+
+
+def test_import_preserves_online_requirement_of_notice_before_pickup(setup):
+    app,client=setup;snapshot=prepare(client);received=event('package',plan_covered=False)
+    pickup=modern_pickup(snapshot,package_refs=[received['id']]);pickup['data']['revisions']={}
+    sync(client,snapshot,[received,pickup]);result=apply(client,snapshot,[received,pickup])
+    assert [x['state'] for x in result.json['results']]==['linked','conflict']
+    assert not query(app,'SELECT * FROM pickups')

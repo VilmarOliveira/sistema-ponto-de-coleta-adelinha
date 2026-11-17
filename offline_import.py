@@ -80,6 +80,8 @@ def apply(db,event,staff,now,revision):
             raise ValueError('Pacote indisponível para aviso.')
         if row['notified_at']:
             return kind,pid,'Aviso anterior preservado.'
+        if datetime.fromisoformat(row['created_at']).astimezone(TZ)>occurred:
+            raise ValueError('Aviso anterior ao recebimento. Confira o relógio e as datas.')
         if data['package_ref'].startswith('srv:') and revision(row)!=data['revision']:
             raise ValueError('Pacote alterado; confira o aviso.')
         db.execute("UPDATE packages SET status='aguardando_retirada',notified_at=? WHERE id=?",(occurred.isoformat(),pid))
@@ -91,10 +93,13 @@ def apply(db,event,staff,now,revision):
         raise ValueError('A seleção aponta duas vezes ao mesmo pacote.')
     marks=','.join('?' for _ in ids)
     packages=db.execute('SELECT * FROM packages WHERE id IN ('+marks+') ORDER BY id'+(' FOR UPDATE' if db.postgres else ''),tuple(ids)).fetchall()
-    if len(packages)!=len(ids) or any(p['status'] not in ('aguardando_aviso','aguardando_retirada') for p in packages):
+    if len(packages)!=len(ids) or any(p['status']!='aguardando_retirada' for p in packages):
         raise ValueError('Pacote já retirado ou indisponível. Confira o comprovante existente.')
     if len({p['client_id'] for p in packages})!=1:
         raise ValueError('Registre separadamente as retiradas de clientes diferentes.')
+    if any(datetime.fromisoformat(p['created_at']).astimezone(TZ)>occurred or
+           (p['notified_at'] and datetime.fromisoformat(p['notified_at']).astimezone(TZ)>occurred) for p in packages):
+        raise ValueError('Retirada anterior ao recebimento ou aviso. Confira as datas antes de importar.')
     by_id={p['id']:p for p in packages}
     for ref in data['package_refs']:
         if ref.startswith('srv:'):
