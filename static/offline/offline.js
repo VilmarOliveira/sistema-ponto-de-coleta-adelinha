@@ -151,7 +151,7 @@
   $('package-count').textContent=String(data.packages.length);
   $('pending-count').textContent=String(state.operations.filter(x=>x.state==='local').length);
   $('review-count').textContent=String(state.operations.filter(x=>['review','conflict'].includes(x.state)).length);
-  choices($('package-client'),data.clients);choices($('pickup-client'),data.clients);pickupChoices();
+  choices($('package-client'),data.clients.filter(c=>c.active!==0));choices($('pickup-client'),data.clients);pickupChoices();
   $('records').replaceChildren();
   for(const op of [...state.operations].reverse()){
    const {event}=op;const entry=document.createElement('details'), title=document.createElement('summary');

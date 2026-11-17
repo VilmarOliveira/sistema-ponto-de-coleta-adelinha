@@ -178,3 +178,12 @@ def test_import_preserves_online_requirement_of_notice_before_pickup(setup):
     sync(client,snapshot,[received,pickup]);result=apply(client,snapshot,[received,pickup])
     assert [x['state'] for x in result.json['results']]==['linked','conflict']
     assert not query(app,'SELECT * FROM pickups')
+
+
+def test_inactive_client_can_still_withdraw_existing_packages(setup):
+    app,client=setup
+    db=DatabaseConnection(app.config['DATABASE']);db.execute('UPDATE clients SET active=0 WHERE id=1');db.commit();db.close()
+    snapshot=prepare(client)
+    assert snapshot['clients'][0]['active']==0
+    entry=modern_pickup(snapshot);sync(client,snapshot,[entry])
+    assert apply(client,snapshot,[entry]).json['results'][0]['state']=='linked'
