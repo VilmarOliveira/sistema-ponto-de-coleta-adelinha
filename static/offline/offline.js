@@ -331,7 +331,7 @@
   await append('pickup',data);event.target.reset();clearSignature();pickupChoices();
  });});
  $('refresh').addEventListener('click',()=>task(async()=>{
-  await sessionIdentity();const snapshot=await api('prepare');if(snapshot.scope!==state.scope)throw new Error('Ambiente ou operador diferente.');
+  await prepareWorker();await sessionIdentity();const snapshot=await api('prepare');if(snapshot.scope!==state.scope)throw new Error('Ambiente ou operador diferente.');
   delete snapshot.csrf_token;await mutate(next=>{next.snapshot=snapshot;});say('Base local atualizada. Registros de contingência preservados.');
  }));
  $('sync').addEventListener('click',()=>task(async()=>{
