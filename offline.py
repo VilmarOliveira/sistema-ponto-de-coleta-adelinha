@@ -261,9 +261,9 @@ def install(app, db, login_required, current_staff, now, current_contract):
             return jsonify(error='Base muito grande para esta preparação. Solicite preparação por seleção.'),409
         clients=[dict(c) for c in clients]
         plans={};stamp=now()
-        for cycle in db().execute("SELECT id,client_id,starts_at,ends_at,used_credits FROM plan_cycles WHERE suspended=0 AND granted_at IS NOT NULL ORDER BY starts_at DESC").fetchall():
+        for cycle in db().execute("SELECT id,client_id,starts_at,ends_at,used_credits,granted_at FROM plan_cycles WHERE suspended=0 ORDER BY starts_at DESC").fetchall():
             if cycle['client_id'] not in plans and plan_service.parse(cycle['starts_at'])<=stamp<plan_service.parse(cycle['ends_at']):
-                plans[cycle['client_id']]={'cycle_id':cycle['id'],'available':max(0,10-cycle['used_credits']),'ends_at':cycle['ends_at']}
+                plans[cycle['client_id']]={'cycle_id':cycle['id'],'available':max(0,10-cycle['used_credits']),'ends_at':cycle['ends_at']} if cycle['granted_at'] else None
         for client in clients:
             client['plan']=plans.get(client['id'])
         advances={r['package_id']:(r['paid']/100,r['settled']/100) for r in db().execute(

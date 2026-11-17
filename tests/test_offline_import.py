@@ -154,3 +154,19 @@ def test_fast_reservation_is_not_bypassed_by_cash_offline(setup):
 def test_cash_observation_field_is_available_in_online_form(setup):
     app,client=setup
     assert 'name="payment_note"' in client.get('/painel').text
+
+
+def test_preparation_query_count_does_not_grow_with_client_count(monkeypatch,setup):
+    app,client=setup;original=DatabaseConnection.execute;calls=[]
+    def counted(self,sql,params=()):
+        calls.append(sql)
+        return original(self,sql,params)
+    monkeypatch.setattr(DatabaseConnection,'execute',counted)
+    prepare(client);baseline=len(calls)
+    db=DatabaseConnection(app.config['DATABASE']);stamp=datetime.now(timezone.utc).isoformat()
+    for i in range(2,22):
+        db.execute("INSERT INTO clients(public_id,name,cpf,phone,terms_version,signature,accepted_at) VALUES(?,?,?,?,?,?,?)",
+                   ('CLIPCA-'+str(i),'Cliente Fictício '+str(i),'00000000000','00000000000','fixture','fixture',stamp))
+    db.commit();db.close();calls.clear()
+    assert len(prepare(client)['clients'])==21
+    assert len(calls)==baseline
