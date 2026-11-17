@@ -136,13 +136,13 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: python -m pip install -r requirements.txt
-      - run: python -m pytest -q tests/test_offline.py
+      - run: python -m pytest -q tests/test_offline.py tests/test_offline_import.py
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - name: Prepare offline browser verification
         run: |
-          npm install --prefix /tmp/adelinha-offline --no-audit --no-fund playwright@1.62.1
+          npm install --prefix /tmp/adelinha-offline --no-audit --no-fund playwright@1.62.1 jsqr@1.4.0
           /tmp/adelinha-offline/node_modules/.bin/playwright install --with-deps chromium
       - name: Check offline operation and recovery
         env:

@@ -1,6 +1,6 @@
-const CACHE='adelinha-offline-shell-v1';
+const CACHE='adelinha-offline-shell-v2';
 const SHELL='/static/offline/index.html';
-const ASSETS=[SHELL,'/static/offline/offline.css','/static/offline/offline.js'];
+const ASSETS=[SHELL,'/static/offline/offline.css','/static/offline/offline.js','/static/offline/finance.js','/static/offline/qrcode.js'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith('adelinha-offline-shell-')&&key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim())));
 self.addEventListener('fetch',event=>{

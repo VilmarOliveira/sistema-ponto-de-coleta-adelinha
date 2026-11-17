@@ -62,7 +62,7 @@ PRIVACY_CONTACT = os.environ.get("PRIVACY_CONTACT", "(16) 98800-4966")
 ADDRESS = PICKUP_ADDRESS  # compatibilidade com comprovantes e integrações existentes
 CLIENT_COLUMNS = "id,public_id,name,cpf,phone,email,terms_version,terms_text,signature,accepted_at,active,session_version,residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,legacy_public_id,contract_public_id,document_brand_version,document_logo_present,terms_display_label"
 PACKAGE_COLUMNS = "id,public_id,client_id,tracking,width,height,length,weight,shelf,category,base_price,status,created_at,notified_at,picked_at"
-PICKUP_COLUMNS = "id,receiver_name,receiver_document,document_type,signature,staff,picked_at,base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,discount_type,discount_input,discount_amount,original_total,final_total,discount_applied_by,surcharge_amount,surcharge_reason,surcharge_applied_by,pix_key_snapshot,pix_receiver_snapshot,pix_key_type_snapshot,document_brand_version,document_logo_present,external_transaction_id,payment_order_id,payment_status"
+PICKUP_COLUMNS = "id,receiver_name,receiver_document,document_type,signature,staff,picked_at,base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,discount_type,discount_input,discount_amount,original_total,final_total,discount_applied_by,surcharge_amount,surcharge_reason,surcharge_applied_by,pix_key_snapshot,pix_receiver_snapshot,pix_key_type_snapshot,document_brand_version,document_logo_present,external_transaction_id,payment_order_id,payment_status,payment_note,offline_operation_id,recorded_offline_at"
 PICKUP_PACKAGE_COLUMNS = "pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,tracking_code,package_category,notified_at,service_amount,late_days,total_amount"
 PACKAGE_COLUMNS_P = ",".join(f"p.{column}" for column in PACKAGE_COLUMNS.split(","))
 PICKUP_COLUMNS_PU = ",".join(f"pu.{column}" for column in PICKUP_COLUMNS.split(","))
@@ -1954,6 +1954,8 @@ def create_app(test_config=None):
         document_type = request.form.get("document_type", "")
         document = request.form.get("receiver_document", "").strip().upper()
         payment_method = request.form.get("payment_method", "")
+        payment_note = request.form.get("payment_note", "").strip()
+        if len(payment_note)>1000: abort(400, "Observação de pagamento muito longa.")
         signature = request.form.get("pickup_signature", "")
         payment_confirmed = request.form.get("payment_confirmed") == "yes"
         allowed_payment_methods = pickup_payments.METHODS
@@ -2010,6 +2012,7 @@ def create_app(test_config=None):
                  discount_type, float(discount_input) if discount_input is not None else None, float(discount_amount),
                  float(original_total), float(final_total), session["staff"], float(surcharge_amount), surcharge_reason, session["staff"]))
             pickup_id = cur.fetchone()["id"]
+            connection.execute("UPDATE pickups SET payment_note=? WHERE id=?", (payment_note,pickup_id))
             connection.execute("UPDATE pickups SET document_brand_version=?,document_logo_present=? WHERE id=?", (BRAND_VERSION, int(ORIGINAL_LOGO.is_file()), pickup_id))
             if payment_method == "Pix AI":
                 connection.execute("UPDATE pickups SET pix_key_snapshot=?,pix_receiver_snapshot=?,pix_key_type_snapshot=? WHERE id=?",
@@ -2080,7 +2083,7 @@ def create_app(test_config=None):
     with app.app_context():
         if not init_db(app.config["DATABASE"]):
             app.config["FASTFLOW_ENABLED"] = "0"
-    offline.install(app, db, login_required, current_staff, now)
+    offline.install(app, db, login_required, current_staff, now, current_contract)
     payment_policies.install(app,db,admin_required,current_staff)
     blog_tools.install(app,db,admin_required,current_staff,now,format_blog_body,validated_image_type)
     install_google_login(app, db, login_blocked, record_login)

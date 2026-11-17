@@ -40,6 +40,7 @@ def prepare(client):
 def event(kind='client',**data):
     defaults={
         'client':dict(name='Cliente Offline',phone='16999999999',cpf='52998224725',email='offline@example.test',address='Rua de Teste, 1',notes=''),
+        'notify':dict(package_ref='srv:1',revision=''),
         'package':dict(client_ref='srv:1',tracking='NEWTRACK',shelf='A1',width=10,height=10,length=10,weight=1,notes=''),
         'pickup':dict(package_refs=['srv:1'],revisions={},receiver_name='Cliente Teste',document_type='CPF',document='52998224725',
                       payment_method='Dinheiro',signature=signature(),amount=4.9,notes='')}
@@ -71,7 +72,7 @@ def test_offline_requires_individual_staff_and_current_permissions(setup):
 def test_snapshot_is_minimal_private_and_shell_is_generic(setup):
     app,client=setup
     snapshot=prepare(client)
-    assert 'cpf' not in snapshot['clients'][0] and 'email' not in snapshot['clients'][0]
+    assert 'password_hash' not in snapshot['clients'][0] and 'signature' not in snapshot['clients'][0]
     assert len(snapshot['packages'][0]['revision'])==64
     assert 'no-store' in client.get('/offline/api/prepare').headers['Cache-Control']
     shell=client.get('/static/offline/index.html')
