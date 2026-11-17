@@ -254,7 +254,7 @@ def install(app, db, login_required, current_staff, now, current_contract):
     @bp.get('/api/prepare')
     @authorized
     def prepare(staff):
-        clients = db().execute('SELECT id,public_id,name,cpf,phone,email,active,residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,terms_version FROM clients c WHERE c.active=1 OR EXISTS(SELECT 1 FROM packages p WHERE p.client_id=c.id AND p.status!='retirado') ORDER BY c.id LIMIT 10001').fetchall()
+        clients = db().execute("SELECT id,public_id,name,cpf,phone,email,active,residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,terms_version FROM clients c WHERE c.active=1 OR EXISTS(SELECT 1 FROM packages p WHERE p.client_id=c.id AND p.status!='retirado') ORDER BY c.id LIMIT 10001").fetchall()
         packages = db().execute("""SELECT id,public_id,client_id,tracking,category,base_price,status,created_at,notified_at,picked_at,shelf,width,height,length,weight
             FROM packages WHERE status!='retirado' ORDER BY id LIMIT 10001""").fetchall()
         if len(clients)>10000 or len(packages)>10000:
