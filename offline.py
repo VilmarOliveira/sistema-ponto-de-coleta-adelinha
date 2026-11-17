@@ -5,9 +5,14 @@ import json
 import math
 import re
 import uuid
+import os
+import offline_import
+from core import pix_payload, classify_package
+import plan_service
+import pickup_payments
 from datetime import datetime, timedelta, timezone
 from functools import wraps
-from flask import Blueprint, abort, jsonify, request, send_from_directory, session
+from flask import Blueprint, abort, jsonify, request, send_from_directory, session, render_template
 from client_compliance import signature_data
 from database import DatabaseIntegrityError
 
@@ -26,6 +31,16 @@ def init_schema(db):
     db.execute("CREATE INDEX IF NOT EXISTS idx_offline_operator ON offline_operations(operator_id,received_at)")
     db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_offline_link
         ON offline_operations(linked_type,linked_id) WHERE linked_id IS NOT NULL AND linked_type IN ('package','pickup')""")
+
+    for table,definitions in {'packages':{'offline_operation_id':'TEXT'},'pickups':{'payment_note':'TEXT','offline_operation_id':'TEXT','recorded_offline_at':'TEXT'}}.items():
+        if db.postgres:
+            names={r['column_name'] for r in db.execute("SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=?",(table,)).fetchall()}
+        else:
+            names={r['name'] for r in db.execute('PRAGMA table_info('+table+')').fetchall()}
+        for column,definition in definitions.items():
+            if column not in names:
+                db.execute('ALTER TABLE '+table+' ADD COLUMN '+column+' '+definition)
+        db.execute('CREATE UNIQUE INDEX IF NOT EXISTS ux_'+table+'_offline ON '+table+'(offline_operation_id) WHERE offline_operation_id IS NOT NULL')
 
 
 def package_revision(row):
@@ -70,8 +85,22 @@ def validate_event(event, stamp):
     if kind == 'client':
         clean = {k: text(data,k,n,k in ('name','phone')) for k,n in
                  (('name',160),('phone',30),('cpf',14),('email',254),('address',500),('notes',1000))}
+        if data.get('registration_version')==2:
+            clean['registration_version']=2
+            for k in ('residential_cep','residential_street','residential_number','residential_district','residential_city','residential_state','residential_complement'):
+                clean[k]=text(data,k,200,k!='residential_complement')
+            clean['signature']=text(data,'signature',150000)
+            clean['contract_version']=text(data,'contract_version',200)
+            clean['contract_digest']=text(data,'contract_digest',64)
+            clean['terms_accept']=text(data,'terms_accept',3)
+            if clean['terms_accept']!='yes' or not signature_data(clean['signature']):
+                raise ValueError('Confira o aceite e a assinatura do cadastro.')
         if clean['cpf'] and not re.fullmatch(r'[0-9]{11}', clean['cpf']):
             raise ValueError('Informe somente os 11 números do CPF.')
+    elif kind == 'notify':
+        clean={'package_ref':reference(data.get('package_ref')),'revision':text(data,'revision',64,False)}
+        if clean['package_ref'].startswith('srv:') and not re.fullmatch(r'[a-f0-9]{64}',clean['revision']):
+            raise ValueError('Atualização do pacote não identificada.')
     elif kind == 'package':
         clean = {'client_ref': reference(data.get('client_ref')),
                  'tracking': text(data,'tracking',100).upper(),
@@ -86,6 +115,13 @@ def validate_event(event, stamp):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError('Peso e medidas devem ser maiores que zero.')
             clean[key] = value
+        if 'plan_covered' in data:
+            if not isinstance(data['plan_covered'],bool):
+                raise ValueError('Cobertura de plano inválida.')
+            clean['plan_covered']=data['plan_covered']
+            clean['plan_cycle_id']=data.get('plan_cycle_id')
+            if clean['plan_cycle_id'] is not None and (not isinstance(clean['plan_cycle_id'],int) or clean['plan_cycle_id']<1):
+                raise ValueError('Ciclo do plano inválido.')
         if clean['width']+clean['height']+clean['length'] > 150 or clean['weight'] > 20:
             raise ValueError('Limite de 150 cm na soma e 20 kg.')
     elif kind == 'pickup':
@@ -109,7 +145,7 @@ def validate_event(event, stamp):
                 clean['revisions'][ref] = rev
         if clean['document_type'] not in ('CPF','RG','CNH') or not re.fullmatch(r'[A-Za-z0-9.\-]{5,30}',clean['document']):
             raise ValueError('Confira o documento de quem retirou.')
-        if clean['payment_method'] not in ('Dinheiro','Conferência manual'):
+        if clean['payment_method'] not in ('Dinheiro','Pix AI','Conferência manual'):
             raise ValueError('Pix automático não funciona offline.')
         try:
             amount = float(data.get('amount'))
@@ -118,6 +154,19 @@ def validate_event(event, stamp):
         if not math.isfinite(amount) or not 0 <= amount <= 1000000:
             raise ValueError('Confira o valor recebido.')
         clean['amount'] = round(amount,2)
+        if data.get('financial_version')==2:
+            clean['financial_version']=2
+            for k in ('surcharge_amount','discount_amount','discount_percent'):
+                clean[k]=text(data,k,30,False)
+            clean['surcharge_reason']=text(data,'surcharge_reason',300,False)
+            clean['payment_note']=text(data,'payment_note',1000,False)
+            if clean['payment_method']=='Pix AI' and clean['amount']>0:
+                pix=data.get('pix')
+                if not isinstance(pix,dict):
+                    raise ValueError('Gere o Pix com os dados preparados.')
+                clean['pix']={k:text(pix,k,n) for k,n in (('key',77),('receiver_name',160),('payload',512))}
+                if clean['pix']['payload']!=pix_payload(clean['pix']['key'],clean['pix']['receiver_name'],clean['amount']):
+                    raise ValueError('Código Pix inválido.')
         if not signature_data(clean['signature']):
             raise ValueError('Assinatura de retirada inválida.')
     else:
@@ -150,7 +199,7 @@ def conflict_reason(db, event):
             client = db.execute('SELECT active FROM clients WHERE id=?',(int(data['client_ref'][4:]),)).fetchone()
             if not client or not client['active']:
                 return 'Cliente alterado ou inativo. Regularize antes de concluir.'
-    else:
+    elif event['kind']=='pickup':
         for ref in data['package_refs']:
             if ref.startswith('srv:'):
                 row = db.execute('SELECT * FROM packages WHERE id=?',(int(ref[4:]),)).fetchone()
@@ -159,7 +208,7 @@ def conflict_reason(db, event):
     return ''
 
 
-def install(app, db, login_required, current_staff, now):
+def install(app, db, login_required, current_staff, now, current_contract):
     bp = Blueprint('offline',__name__,url_prefix='/offline')
 
     def authorized(view):
@@ -205,15 +254,31 @@ def install(app, db, login_required, current_staff, now):
     @bp.get('/api/prepare')
     @authorized
     def prepare(staff):
-        clients = db().execute('SELECT id,public_id,name,phone FROM clients WHERE active=1 ORDER BY id LIMIT 10001').fetchall()
+        clients = db().execute('SELECT id,public_id,name,cpf,phone,email,residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,terms_version FROM clients WHERE active=1 ORDER BY id LIMIT 10001').fetchall()
         packages = db().execute("""SELECT id,public_id,client_id,tracking,category,base_price,status,created_at,notified_at,picked_at,shelf,width,height,length,weight
             FROM packages WHERE status!='retirado' ORDER BY id LIMIT 10001""").fetchall()
         if len(clients)>10000 or len(packages)>10000:
             return jsonify(error='Base muito grande para esta preparação. Solicite preparação por seleção.'),409
+        clients=[dict(c) for c in clients]
+        for client in clients:
+            cycle,_,_=plan_service.cycles(db(),client['id'],now())
+            client['plan']={'cycle_id':cycle['id'],'available':max(0,10-cycle['used_credits']),'ends_at':cycle['ends_at']} if cycle and cycle['granted_at'] and not cycle['suspended'] else None
+        prepared_packages=[]
+        for p in packages:
+            item=dict(p,revision=package_revision(p))
+            item['prepaid'],item['settled']=pickup_payments.prepaid(db(),p['id'])
+            prepared_packages.append(item)
+        setting=db().execute('SELECT pix_key,pix_receiver_name,pix_key_type FROM settings WHERE id=1').fetchone()
+        allow_pix=app.config.get('SITE_ENVIRONMENT')!='test' or str(app.config.get('STAGING_OFFLINE_PIX_ENABLED',os.getenv('STAGING_OFFLINE_PIX_ENABLED','0'))).lower() in ('1','true')
+        pix={'enabled':False}
+        if allow_pix and setting['pix_key_type']=='CNPJ' and setting['pix_key'] and setting['pix_receiver_name']:
+            pix=dict(enabled=True,key=setting['pix_key'],receiver_name=setting['pix_receiver_name'],city='FRANCA')
+        history=[dict(x) for x in db().execute("SELECT id,picked_at,receiver_name,payment_method,total_paid,payment_note FROM pickups ORDER BY id DESC LIMIT 100").fetchall()]
         result=identity(staff)
-        result.update(prepared_at=now().isoformat(),expires_at=(now()+timedelta(days=7)).isoformat(),
-                      clients=[dict(x) for x in clients],
-                      packages=[dict(x,revision=package_revision(x)) for x in packages])
+        version,label,body=current_contract()
+        result.update(prices=dict(small=classify_package(10,10,10,1)[1],large=classify_package(50,50,50,20)[1]),contract=dict(version=version,label=label,body=body,digest=hashlib.sha256(body.encode()).hexdigest()),pix=pix,history=history,prepared_at=now().isoformat(),expires_at=(now()+timedelta(days=7)).isoformat(),
+                      clients=clients,
+                      packages=prepared_packages)
         return jsonify(result)
 
     @bp.post('/api/sync')
@@ -261,12 +326,68 @@ def install(app, db, login_required, current_staff, now):
                     return jsonify(error='Identificador já usado com outro conteúdo. Nenhum registro deste envio foi alterado.'),409
                 for ref in event_references(event):
                     connection.execute('INSERT INTO offline_operation_refs(operation_id,ref) VALUES(?,?) ON CONFLICT DO NOTHING',(event['id'],ref))
-                results.append({'id':row['id'],'state':row['state'],'reason':row['reason']})
+                results.append({'id':row['id'],'state':row['state'],'reason':row['reason'],'linked_id':row['linked_id']})
             connection.commit()
         except Exception:
             connection.rollback()
             raise
         return jsonify(results=results)
+
+    @bp.get('/registration/<oid>')
+    @authorized
+    def finish_registration(staff,oid):
+        row=db().execute("SELECT payload FROM offline_operations WHERE id=? AND operator_id=? AND kind='client'",(oid,staff['id'])).fetchone()
+        if not row: abort(404)
+        data=json.loads(row['payload'])['data']
+        form={k:v for k,v in data.items() if k in ('name','cpf','phone','email') or k.startswith('residential_')}
+        return render_template('registration.html',registration_form=form)
+
+    @bp.post('/api/import')
+    @authorized
+    def import_operations(staff):
+        try:
+            payload=json.loads(request.form.get('payload',''))
+            if not isinstance(payload,dict) or payload.get('scope')!=identity(staff)['scope']:
+                return jsonify(error='Use o mesmo operador e ambiente.'),409
+            ids=payload.get('ids')
+            if not isinstance(ids,list) or not 1<=len(ids)<=20:
+                raise ValueError('Importe de 1 a 20 registros por vez.')
+            ids=sorted(set(uuid_value(x) for x in ids))
+        except (ValueError,TypeError) as error:
+            return jsonify(error=str(error)),400
+        connection=db();connection.commit();connection.begin_write();results=[]
+        try:
+            if connection.postgres:
+                connection.execute('SELECT pg_advisory_xact_lock(?)',(int(hashlib.sha256(('offline-import:'+str(staff['id'])).encode()).hexdigest()[:15],16),))
+            rows=connection.execute('SELECT * FROM offline_operations WHERE id IN ('+','.join('?' for _ in ids)+') ORDER BY id'+(' FOR UPDATE' if connection.postgres else ''),tuple(ids)).fetchall()
+            if len(rows)!=len(ids) or any(r['operator_id']!=staff['id'] for r in rows):
+                abort(404)
+            priority={'client':0,'package':1,'notify':2,'pickup':3}
+            for row in sorted(rows,key=lambda r:(priority.get(r['kind'],9),r['occurred_at'],r['id'])):
+                if row['state'] in ('linked','dismissed'):
+                    results.append(dict(id=row['id'],state=row['state'],reason=row['reason'],linked_id=row['linked_id']))
+                    continue
+                connection.execute('SAVEPOINT offline_apply')
+                try:
+                    if row['reason'].startswith('Outro registro de contingência'):
+                        raise ValueError(row['reason'])
+                    kind,target,reason=offline_import.apply(connection,json.loads(row['payload']),staff,now(),package_revision)
+                    connection.execute("UPDATE offline_operations SET state='linked',linked_type=?,linked_id=?,reviewed_by=?,reviewed_at=?,review_note=?,reason=? WHERE id=?",
+                        (kind,target,staff['id'],now().isoformat(),'Importação compatível; pagamento conferido pelo operador.',reason,row['id']))
+                    connection.execute("INSERT INTO audit_logs(actor,action,entity_type,entity_id,details,created_at) VALUES(?,?,?,?,?,?)",
+                        (staff['public_id'] or str(staff['id']),'importar_offline',kind,target,row['id'],now().isoformat()))
+                    connection.execute('RELEASE SAVEPOINT offline_apply')
+                    results.append(dict(id=row['id'],state='linked',reason=reason,linked_id=target))
+                except (ValueError,DatabaseIntegrityError) as error:
+                    connection.execute('ROLLBACK TO SAVEPOINT offline_apply');connection.execute('RELEASE SAVEPOINT offline_apply')
+                    reason=str(error) if isinstance(error,ValueError) else 'Conflito com outro registro. Nenhuma operação foi duplicada.'
+                    connection.execute("UPDATE offline_operations SET state='conflict',reason=? WHERE id=?",(reason,row['id']))
+                    results.append(dict(id=row['id'],state='conflict',reason=reason,linked_id=None))
+            connection.commit()
+            return jsonify(results=results)
+        except Exception:
+            connection.rollback()
+            raise
 
     @bp.get('/api/inbox')
     @authorized
@@ -317,7 +438,7 @@ def install(app, db, login_required, current_staff, now):
             target=None
             if target_code.isdigit():
                 target=int(target_code)
-            elif kind in ('client','package'):
+            elif kind in ('client','package','notify'):
                 table='clients' if kind=='client' else 'packages'
                 match=connection.execute('SELECT id FROM '+table+' WHERE public_id=?',(target_code,)).fetchone()
                 target=match['id'] if match else None
@@ -331,6 +452,9 @@ def install(app, db, login_required, current_staff, now):
                 valid=actual and ((data['cpf'] and actual['cpf']==data['cpf']) or
                     (not data['cpf'] and actual['name'].strip().casefold()==data['name'].casefold()
                      and re.sub(r'\D','',actual['phone'])==re.sub(r'\D','',data['phone'])))
+            elif kind=='notify':
+                actual=connection.execute('SELECT notified_at FROM packages WHERE id=?',(target,)).fetchone()
+                valid=actual and actual['notified_at'] and target==resolved_package(data['package_ref'])
             elif kind=='package':
                 actual=connection.execute('SELECT tracking,client_id FROM packages WHERE id=?',(target,)).fetchone()
                 valid=actual and actual['tracking'].upper()==data['tracking'] and actual['client_id']==resolved_client(data['client_ref'])

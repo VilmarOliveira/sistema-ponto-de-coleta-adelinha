@@ -157,6 +157,7 @@ def build_receipt_pdf(withdrawal, packages, address):
         ("Desconto aplicado", _display(discount if discount is not None else 0, True)),
         ("Saldo pago nesta retirada" if _value(withdrawal,"prepaid_amount") else "Total final pago", _display(final_total, True)),
         ("Tipo de Pagamento", _display(_value(withdrawal, "payment_method"))),
+        ("Observação do pagamento", _display(_value(withdrawal, "payment_note"))),
     )
     if _value(withdrawal,"prepaid_amount"):
         fields += (("Pago antecipadamente neste pacote",_display(_value(withdrawal,"prepaid_amount"),True)),)
