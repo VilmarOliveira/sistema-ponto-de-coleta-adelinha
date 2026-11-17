@@ -40,8 +40,10 @@ let diagnosticPage;
  const decoded=jsQR(new Uint8ClampedArray(pixels.data),pixels.width,pixels.height);assert.ok(decoded,'QR decodes');assert.equal(decoded.data,code);
  await page.locator('#offline-payment-method').selectOption('Dinheiro');assert.equal(await page.locator('#offline-pix').isVisible(),false);
  assert.equal(await page.locator('#pickup-form [name="amount"]').inputValue(),'4.90');
+ await page.locator('#payment-notes > summary').click();
  await page.locator('#pickup-form [name="notes"]').fill('Transferência conferida TESTE');
  await draw(page,'signature');await page.locator('#confirm-pickup').check();await page.locator('#pickup-form button.primary').click();await pending(4);
+ await page.locator('#backup-tools > summary').click();
  const downloadWait=page.waitForEvent('download');await page.locator('#export').click();const download=await downloadWait,backup=path.join(out,'encrypted-backup-fixture.json');await download.saveAs(backup);
  assert.ok(!(await fs.readFile(backup,'utf8')).includes('Cliente Fictício Offline'));
  await page.reload();await page.locator('#unlock-password').fill(password);await page.locator('#unlock-form button').click();await pending(4);
@@ -56,7 +58,8 @@ let diagnosticPage;
  await restored.locator('#unlock-password').fill(password);await restored.locator('#unlock-form button').click();await restored.waitForFunction(()=>document.querySelector('#pending-count').textContent==='4');
  await restoredContext.setOffline(false);await restored.locator('#sync').click();await restored.waitForFunction(()=>document.querySelector('#message').textContent.includes('pendências'));
  const after=await restored.evaluate(async()=>{const r=await fetch('/__offline_counts__');return r.json();});assert.equal(after.packages,2);assert.equal(after.pickups,1);
- for(const width of [360,768,1280]){await page.setViewportSize({width,height:1000});await page.locator('[data-tab="records"]').click();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Horizontal overflow '+width);await page.screenshot({path:path.join(out,'offline-'+width+'.png'),fullPage:true});}
+ assert.equal(await page.locator('#workspace > section[id^="tab-"]:visible').count(),1);
+ for(const width of [360,768,1280]){await page.setViewportSize({width,height:1000});await page.locator('[data-tab="records"]').click();for(const button of await page.locator('button:visible').all())assert.equal(await button.locator(':scope > svg.ui-icon').count(),1);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Horizontal overflow '+width);await page.screenshot({path:path.join(out,'offline-'+width+'.png'),fullPage:true});}
  const stale=await context.newPage();await stale.goto(origin+'/offline/');await stale.locator('#unlock-password').fill(password);await stale.locator('#unlock-form button').click();await stale.waitForFunction(()=>!document.querySelector('#workspace').hidden);
  await receive(page,'NEWLOCAL0002');await pending(1);await receive(stale,'STALELOCAL0003');await stale.waitForFunction(()=>document.querySelector('#message').textContent.includes('outra aba'));
  assert.deepEqual(errors,[]);await browser.close();

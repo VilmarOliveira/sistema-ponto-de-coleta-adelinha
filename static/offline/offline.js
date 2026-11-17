@@ -1,6 +1,26 @@
 'use strict';
 (() => {
  const $=id=>document.getElementById(id);
+
+ function uiIcon(name){
+  const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg'),use=document.createElementNS(ns,'use');
+  svg.setAttribute('class','ui-icon');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');svg.setAttribute('focusable','false');use.setAttribute('href','#of-'+name);svg.append(use);return svg;
+ }
+ function decorate(root){
+  const rules=[[/cadastrar cliente|cadastro|validaç/i,'user-plus'],[/receber pacote/i,'parcel-in'],[/retirada|retirar/i,'pickup'],[/sincronizar|registros enviados|registros$/i,'exchange'],[/atualizar/i,'refresh'],[/desbloquear/i,'login'],[/bloquear/i,'lock'],[/preparar|aparelho/i,'monitor'],[/restaurar/i,'upload'],[/backup|baixar/i,'download'],[/remover|não aplicar|limpar/i,'trash'],[/copiar/i,'copy'],[/pix/i,'pix'],[/salvar/i,'save'],[/aviso/i,'bell'],[/conferir|vincular/i,'check-circle'],[/contrato/i,'contract'],[/histórico/i,'calendar'],[/assinatura/i,'edit'],[/dados do cliente/i,'person'],[/pacotes/i,'box'],[/observa/i,'clipboard'],[/acréscimo|desconto/i,'wallet'],[/como funciona/i,'help'],[/entrar|área do ponto/i,'login']];
+  for(const el of root.querySelectorAll('button,a.button,label.button,summary,h1,h2,[data-ui-icon]')){
+   if(el.querySelector(':scope > svg.ui-icon'))continue;
+   const name=el.dataset.uiIcon||rules.find(([regex])=>regex.test(el.textContent.trim()))?.[1]||'clipboard';el.prepend(uiIcon(name));
+  }
+ }
+ function recordDetails(event){
+  const data=event.data,dl=document.createElement('dl');dl.className='record-data';
+  const pairs=[['Nome',data.name||data.receiver_name],['CPF',data.cpf],['Telefone',data.phone],['E-mail',data.email],['Endereço',[data.residential_street,data.residential_number,data.residential_district,data.residential_city,data.residential_state,data.residential_cep,data.residential_complement].filter(Boolean).join(', ')||data.address],['Rastreio',data.tracking],['Prateleira',data.shelf],['Medidas',data.width?data.width+' × '+data.height+' × '+data.length+' cm':null],['Peso',data.weight?data.weight+' kg':null],['Pagamento',data.payment_method],['Valor',data.amount!==undefined?OfflineFinance.money(data.amount):null],['Documento',data.document?data.document_type+' • '+data.document:null],['Observação',data.payment_note||data.notes],['Pacotes',data.package_refs?.map(ref=>{const item=state.snapshot.packages.find(p=>'srv:'+p.id===canonical(ref,'package'));return item?.tracking||item?.public_id||'OFF-'+ref.slice(0,8);}).join(', ')]];
+  for(const [key,value] of pairs)if(value){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=key;dd.textContent=value;dl.append(dt,dd);}
+  return dl;
+ }
+ document.addEventListener('invalid',event=>{let parent=event.target.closest('details');while(parent){parent.open=true;parent=parent.parentElement.closest('details');}},true);
+
  const DB='adelinha-contingency-v1';
  let db, state=null, key=null, envelope=null, identity=null, busy=false, idle;
  const encoder=new TextEncoder(), decoder=new TextDecoder();
@@ -10,8 +30,8 @@
  const say=(message,error=false)=>{$('message').textContent=message;$('message').classList.toggle('error',error);};
  const statusLabels={local:'Aguardando envio',review:'Enviado • conferir online',conflict:'Conflito • revisar online',linked:'Sincronizado no sistema',dismissed:'Conferido • não aplicado'};
  function connection() {
-  $('connection').textContent=navigator.onLine?'Conexão disponível • Sincronização exige sessão ativa':'Sem internet • Dados salvos neste aparelho';
-  $('connection').classList.toggle('online',navigator.onLine);
+  $('connection').textContent=navigator.onLine?'Online • Sincronize após o atendimento':'Offline • Salvo neste aparelho';
+  $('connection').classList.toggle('online',navigator.onLine);$('connection').prepend(uiIcon(navigator.onLine?'monitor':'wifi-off'));
  }
  function transaction(mode,fn) {
   return new Promise((resolve,reject)=>{
@@ -91,7 +111,7 @@
   const registration=await navigator.serviceWorker.register('/offline/sw.js',{scope:'/offline/'});
   await navigator.serviceWorker.ready;
   if(registration.installing)await new Promise((resolve,reject)=>{const worker=registration.installing;worker.addEventListener('statechange',()=>{if(worker.state==='activated')resolve();if(worker.state==='redundant')reject(new Error('Não foi possível preparar as telas offline.'));});});
-  const cache=await caches.open('adelinha-offline-shell-v2');
+  const cache=await caches.open('adelinha-offline-shell-v3');
   for(const path of ['/static/offline/index.html','/static/offline/offline.css','/static/offline/offline.js','/static/offline/finance.js','/static/offline/qrcode.js'])if(!await cache.match(path))throw new Error('As telas offline não foram preparadas. Tente novamente conectado.');
  }
  function ensureReady(){
@@ -139,7 +159,7 @@
   showClient('pickup-client','pickup-client-info');updateQuote();
  }
  function tab(name){
-  for(const key of ['client','package','pickup','records'])$('tab-'+key).hidden=key!==name;
+  for(const key of ['overview','client','package','pickup','records'])$('tab-'+key).hidden=key!==name;
   document.querySelectorAll('[data-tab]').forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.tab===name)));
  }
  function render(){
@@ -159,9 +179,8 @@
    title.textContent=label+' OFF-'+event.id.slice(0,8)+' • '+(statusLabels[op.state]||op.state);
    entry.append(title);
    const date=document.createElement('p');date.textContent='Registrado em '+new Date(event.created_at).toLocaleString('pt-BR');entry.append(date);
-   const pre=document.createElement('pre');const show={...event.data};delete show.signature;delete show.revisions;
-   pre.textContent=JSON.stringify(show,null,2);entry.append(pre);
-   if(/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(event.data.signature||'')){const image=document.createElement('img');image.alt='Assinatura registrada na retirada';image.src=event.data.signature;image.style.maxWidth='100%';entry.append(image);}
+   entry.append(recordDetails(event));entry.dataset.state=op.state;
+   if(/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(event.data.signature||'')){const image=document.createElement('img');image.alt='Assinatura registrada na retirada';image.src=event.data.signature;image.style.maxWidth='100%';const proof=document.createElement('details'),label=document.createElement('summary');label.textContent='Ver assinatura';proof.append(label,image);entry.append(proof);}
    if(event.kind==='pickup'){const receipt=document.createElement('button');receipt.type='button';receipt.textContent='Comprovante local';receipt.addEventListener('click',()=>printReceipt(op));entry.append(receipt);}
    if(event.kind==='client'&&['review','conflict'].includes(op.state)){const finish=document.createElement('a');finish.className='button';finish.textContent='Concluir validação do cadastro online';finish.href='/offline/registration/'+event.id;finish.target='_blank';finish.rel='noopener';entry.append(finish);}
    if(op.reason){const reason=document.createElement('p');reason.textContent=op.reason;entry.append(reason);}
@@ -185,13 +204,13 @@
      await mutate(next=>{const item=next.operations.find(x=>x.event.id===op.event.id);item.state=result.state;item.reason=note.value;});
      say('Registro conferido como não aplicado. Histórico preservado.');
     }));
-    form.append(dismiss);entry.append(form);
+    form.append(dismiss);const manual=document.createElement('details'),label=document.createElement('summary');label.textContent='Conferir vínculo existente';manual.append(label,form);entry.append(manual);
    }
    $('records').append(entry);
   }
   renderOverview();showClient('package-client','client-info');
   if(state.snapshot.contract)$('client-contract').textContent=state.snapshot.contract.label+'\n\n'+state.snapshot.contract.body;
-  resetIdle();
+  decorate($('workspace'));resetIdle();
  }
  async function append(kind,data){
   ensureReady();
@@ -235,10 +254,10 @@
   $('package-list').replaceChildren();
   for(const p of packages.filter(p=>[p.public_id,p.tracking,clients.find(c=>c.ref===p.client_ref)?.name].join(' ').toLocaleLowerCase().includes(search))){
    const article=document.createElement('article'),label=document.createElement('span'),owner=clients.find(c=>c.ref===p.client_ref),fee=OfflineFinance.fees(p);
-   label.textContent=(p.public_id||'Pacote local')+' • '+p.tracking+' • '+(owner?.name||'Cliente')+' • '+p.category+' • Prateleira '+p.shelf+' • '+(p.notified_at?'Aguardando retirada':'Aguardando aviso')+' • Saldo '+OfflineFinance.money(fee.total);
+   const title=document.createElement('strong'),info=document.createElement('small');title.textContent=p.tracking+' • '+(owner?.name||'Cliente');info.textContent=p.category+' • '+p.shelf+' • '+(p.notified_at?'Aguardando retirada':'Aguardando aviso')+' • '+OfflineFinance.money(fee.total);label.append(title,info);
    article.append(label);
    if(!p.notified_at){const button=document.createElement('button');button.textContent='Registrar aviso de chegada';button.type='button';button.addEventListener('click',()=>task(async()=>{await append('notify',{package_ref:p.ref,revision:p.revision||''});say('Aviso registrado localmente. O prazo usa esta data e não será reiniciado na sincronização.');}));article.append(button);}
-   $('package-list').append(article);
+   decorate(article);$('package-list').append(article);
   }
   $('online-history').replaceChildren();for(const r of state.snapshot.history||[]){const p=document.createElement('p');p.textContent='CMPPCA-'+r.id+' • '+new Date(r.picked_at).toLocaleString('pt-BR')+' • '+r.receiver_name+' • '+r.payment_method+' • '+OfflineFinance.money(r.total_paid)+(r.payment_note?' • '+r.payment_note:'');$('online-history').append(p);}
  }
@@ -282,7 +301,7 @@
   delete snapshot.csrf_token;
   envelope={version:1,origin:location.origin,scope:snapshot.scope,salt:bytesTo64(salt),revision:null};
   await save({scope:snapshot.scope,device:crypto.randomUUID(),snapshot,operations:[]},true);
-  $('new-password').value='';$('repeat-password').value='';render();tab('records');
+  $('new-password').value='';$('repeat-password').value='';render();tab('overview');
   say('Aparelho preparado. Agora é possível abrir esta página sem internet. Guarde sua senha e faça backup dos registros.');
  });});
  $('unlock-form').addEventListener('submit',event=>{event.preventDefault();task(async()=>{
@@ -292,7 +311,7 @@
   try{decoded=JSON.parse(decoder.decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:from64(row.iv),additionalData:encoder.encode(row.scope)},trial,from64(row.cipher))));}
   catch(_){throw new Error('Senha local incorreta ou arquivo danificado. Os dados não foram alterados.');}
   if(decoded.scope!==row.scope||!Array.isArray(decoded.operations)||!Array.isArray(decoded.snapshot?.clients)||!Array.isArray(decoded.snapshot?.packages))throw new Error('Dados locais incompatíveis.');
-  key=trial;envelope=row;state=decoded;$('unlock-password').value='';render();tab('records');say('Dados locais desbloqueados.');
+  key=trial;envelope=row;state=decoded;$('unlock-password').value='';render();tab('overview');say('Dados locais desbloqueados.');
  });});
  $('client-form').addEventListener('submit',event=>{event.preventDefault();task(async()=>{
   const data=Object.fromEntries(new FormData(event.target));
@@ -317,7 +336,7 @@
   const client=projected().clients.find(c=>c.ref===data.client_ref),small=data.width+data.height+data.length<=80&&data.weight<=10,cost=small?1:2;
   data.plan_covered=!!(client?.plan&&Date.parse(client.plan.ends_at)>Date.now()&&client.plan.available>=cost);
   data.plan_cycle_id=data.plan_covered?client.plan.cycle_id:null;
-  await append('package',data);event.target.reset();category();
+  await append('package',data);event.target.reset();category();tab('overview');
  });});
  $('pickup-client').addEventListener('change',pickupChoices);
  $('pickup-form').addEventListener('submit',event=>{event.preventDefault();task(async()=>{
@@ -328,7 +347,7 @@
   data.financial_version=2;data.payment_note=data.notes||'';data.signature=canvas.toDataURL('image/png');data.amount=Number(data.amount);
   const quoted=currentQuote();if(!quoted||OfflineFinance.cents(quoted.total)!==OfflineFinance.cents(data.amount))throw new Error('Confira o total da retirada.');
   if(data.payment_method==='Pix AI'&&data.amount>0){const config=state.snapshot.pix;data.pix={key:config?.key,receiver_name:config?.receiver_name,payload:OfflineFinance.pix(config,data.amount)};}
-  await append('pickup',data);event.target.reset();clearSignature();pickupChoices();
+  await append('pickup',data);event.target.reset();clearSignature();pickupChoices();tab('overview');
  });});
  $('refresh').addEventListener('click',()=>task(async()=>{
   await prepareWorker();await sessionIdentity();const snapshot=await api('prepare');if(snapshot.scope!==state.scope)throw new Error('Ambiente ou operador diferente.');
@@ -391,7 +410,7 @@
  window.addEventListener('pagehide',()=>{state=null;key=null;identity=null;});
  window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
  async function boot(){
-  connection();
+  decorate(document);connection();
   if(!crypto.subtle||!window.indexedDB)throw new Error('Use navegador com HTTPS e armazenamento local habilitado.');
   db=await new Promise((resolve,reject)=>{const request=indexedDB.open(DB,1);request.onupgradeneeded=()=>request.result.createObjectStore('vault');request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
   envelope=await readVault();lock();
