@@ -1,4 +1,4 @@
-const CACHE='adelinha-offline-shell-v2';
+const CACHE='adelinha-offline-shell-v3';
 const SHELL='/static/offline/index.html';
 const ASSETS=[SHELL,'/static/offline/offline.css','/static/offline/offline.js','/static/offline/finance.js','/static/offline/qrcode.js'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting())));
