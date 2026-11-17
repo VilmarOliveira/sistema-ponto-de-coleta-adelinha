@@ -260,13 +260,18 @@ def install(app, db, login_required, current_staff, now, current_contract):
         if len(clients)>10000 or len(packages)>10000:
             return jsonify(error='Base muito grande para esta preparação. Solicite preparação por seleção.'),409
         clients=[dict(c) for c in clients]
+        plans={};stamp=now()
+        for cycle in db().execute("SELECT id,client_id,starts_at,ends_at,used_credits FROM plan_cycles WHERE suspended=0 AND granted_at IS NOT NULL ORDER BY starts_at DESC").fetchall():
+            if cycle['client_id'] not in plans and plan_service.parse(cycle['starts_at'])<=stamp<plan_service.parse(cycle['ends_at']):
+                plans[cycle['client_id']]={'cycle_id':cycle['id'],'available':max(0,10-cycle['used_credits']),'ends_at':cycle['ends_at']}
         for client in clients:
-            cycle,_,_=plan_service.cycles(db(),client['id'],now())
-            client['plan']={'cycle_id':cycle['id'],'available':max(0,10-cycle['used_credits']),'ends_at':cycle['ends_at']} if cycle and cycle['granted_at'] and not cycle['suspended'] else None
+            client['plan']=plans.get(client['id'])
+        advances={r['package_id']:(r['paid']/100,r['settled']/100) for r in db().execute(
+            "SELECT a.package_id,SUM(a.paid_cents) paid,SUM(a.settled_cents) settled FROM package_prepayments a JOIN packages p ON p.id=a.package_id WHERE p.status!='retirado' GROUP BY a.package_id").fetchall()}
         prepared_packages=[]
         for p in packages:
             item=dict(p,revision=package_revision(p))
-            item['prepaid'],item['settled']=pickup_payments.prepaid(db(),p['id'])
+            item['prepaid'],item['settled']=advances.get(p['id'],(0,0))
             prepared_packages.append(item)
         setting=db().execute('SELECT pix_key,pix_receiver_name,pix_key_type FROM settings WHERE id=1').fetchone()
         allow_pix=app.config.get('SITE_ENVIRONMENT')!='test' or str(app.config.get('STAGING_OFFLINE_PIX_ENABLED',os.getenv('STAGING_OFFLINE_PIX_ENABLED','0'))).lower() in ('1','true')
