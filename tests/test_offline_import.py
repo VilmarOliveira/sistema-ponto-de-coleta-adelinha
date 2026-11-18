@@ -17,7 +17,7 @@ def apply(client,snapshot,entries):
 def modern_pickup(snapshot,**extra):
     return event('pickup',financial_version=2,payment_note='Transferência conferida; referência TESTE',
         surcharge_amount='0',surcharge_reason='',discount_amount='',discount_percent='',
-        revisions={'srv:1':snapshot['packages'][0]['revision']},**extra)
+        revisions={'srv:1':snapshot['packages'][0]['revision']} if snapshot['packages'] else {},**extra)
 
 
 def test_compatible_cash_pickup_is_official_with_note_original_date_and_no_replay(setup):
@@ -89,6 +89,8 @@ def test_receive_notify_and_pickup_same_offline_package_resolve_dependencies(set
     pickup=modern_pickup(snapshot,package_refs=[received['id']])
     pickup['data']['revisions']={}
     assert sync(client,snapshot,[received,notice,pickup]).status_code==200
+    assert apply(client,snapshot,[received]).json['results'][0]['state']=='linked'
+    assert client.post('/offline/api/notice/'+notice['id'],data={'csrf_token':token(client),'confirmed':'yes'}).status_code==200
     result=apply(client,snapshot,[pickup,notice,received])
     assert all(r['state']=='linked' for r in result.json['results']),result.text
     package=query(app,"SELECT * FROM packages WHERE tracking='NEWTRACK'")[0]
@@ -135,6 +137,7 @@ def test_own_offline_notice_does_not_become_false_revision_conflict(setup):
     snapshot=prepare(client);notice=event('notify',package_ref='srv:1',revision=snapshot['packages'][0]['revision'])
     pickup=modern_pickup(snapshot)
     sync(client,snapshot,[notice,pickup])
+    assert client.post('/offline/api/notice/'+notice['id'],data={'csrf_token':token(client),'confirmed':'yes'}).status_code==200
     result=apply(client,snapshot,[notice,pickup])
     assert all(x['state']=='linked' for x in result.json['results']),result.text
 
@@ -187,3 +190,81 @@ def test_inactive_client_can_still_withdraw_existing_packages(setup):
     assert snapshot['clients'][0]['active']==0
     entry=modern_pickup(snapshot);sync(client,snapshot,[entry])
     assert apply(client,snapshot,[entry]).json['results'][0]['state']=='linked'
+
+
+def new_client(snapshot,**extra):
+    from test_app import signature
+    return event(registration_version=2,name='Novo Cliente Offline',cpf='11144477735',
+        email='novo@example.test',residential_cep='14400000',residential_street='Rua Teste',
+        residential_number='1',residential_district='Centro',residential_city='Franca',residential_state='SP',
+        residential_complement='',signature=signature(),terms_accept='yes',
+        contract_version=snapshot['contract']['version'],contract_digest=snapshot['contract']['digest'],**extra)
+
+
+def test_new_client_official_sequence_then_notice_confirmation_then_pickup(setup):
+    from client_compliance import diagnostics
+    app,client=setup;snapshot=prepare(client)
+    db=DatabaseConnection(app.config['DATABASE']);db.execute("UPDATE id_sequences SET last_value=41 WHERE prefix='CLIPCA'");db.commit();db.close()
+    owner=new_client(snapshot);package=event('package',client_ref=owner['id'],plan_covered=False)
+    notice=event('notify',package_ref=package['id'],revision='')
+    pickup=modern_pickup(snapshot,package_refs=[package['id']]);pickup['data']['revisions']={}
+    entries=[owner,package,notice,pickup]
+    assert sync(client,snapshot,entries).status_code==200
+    first=apply(client,snapshot,list(reversed(entries)))
+    assert [r['state'] for r in first.json['results']]==['linked','linked','conflict','conflict'],first.text
+    saved=dict(query(app,"SELECT * FROM clients WHERE cpf='11144477735'")[0])
+    assert saved['public_id']=='CLIPCA-42'
+    assert saved['password_hash'] is None and saved['confirmation_validated_at'] is None
+    assert {'email_confirmation','password'}<={x['key'] for x in diagnostics(saved)}
+    assert not query(app,'SELECT * FROM pickups')
+    request=client.get('/offline/api/notice/'+notice['id'])
+    assert request.status_code==200 and request.json['package_code'].startswith('PCTPCA-')
+    assert request.json['url'].startswith('https://wa.me/') and not request.json['confirmed']
+    assert 'não reinicia' in request.json['message']
+    assert client.post('/offline/api/notice/'+notice['id'],data={'csrf_token':token(client)}).status_code==400
+    assert client.post('/offline/api/notice/'+notice['id'],data={'csrf_token':token(client),'confirmed':'yes'}).status_code==200
+    final=apply(client,snapshot,entries)
+    assert all(r['state']=='linked' for r in final.json['results']),final.text
+    assert len(query(app,'SELECT * FROM pickups'))==1
+    apply(client,snapshot,entries)
+    assert len(query(app,'SELECT * FROM clients'))==2 and len(query(app,'SELECT * FROM pickups'))==1
+    assert len(query(app,'SELECT * FROM offline_notice_confirmations'))==1
+    assert datetime.fromisoformat(query(app,'SELECT picked_at FROM pickups')[0]['picked_at'])==datetime.fromisoformat(pickup['created_at'])
+
+
+def test_changed_contract_does_not_create_client_or_claim_email_confirmation(setup):
+    app,client=setup;snapshot=prepare(client);owner=new_client(snapshot)
+    owner['data']['contract_digest']='0'*64
+    sync(client,snapshot,[owner]);result=apply(client,snapshot,[owner])
+    assert result.json['results'][0]['state']=='conflict'
+    assert len(query(app,'SELECT * FROM clients'))==1
+
+
+def test_notice_confirmation_requires_owner_and_csrf(setup):
+    app,client=setup;snapshot=prepare(client);notice=event('notify',revision=snapshot['packages'][0]['revision'])
+    sync(client,snapshot,[notice])
+    assert client.post('/offline/api/notice/'+notice['id'],data={'confirmed':'yes'}).status_code==400
+    assert client.get('/offline/api/notice/'+str(uuid.uuid4())).status_code==404
+
+
+def test_postgres_new_offline_client_notice_and_pickup():
+    import os
+    import psycopg
+    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+    from app import create_app
+    from test_app import register
+    url=os.environ.get('TEST_DATABASE_URL')
+    if not url: pytest.skip('Requires PostgreSQL fixture')
+    schema='offline_new_'+uuid.uuid4().hex
+    with psycopg.connect(url,autocommit=True) as root: root.execute('CREATE SCHEMA '+schema)
+    parsed=urlsplit(url)
+    scoped=urlunsplit(parsed._replace(query=urlencode(parse_qsl(parsed.query)+[('options','-csearch_path='+schema)])))
+    try:
+        app=create_app({'TESTING':True,'SECRET_KEY':'pg-offline-new','DATABASE':scoped})
+        client=app.test_client();register(client)
+        db=DatabaseConnection(scoped)
+        db.execute("INSERT INTO staff_users(id,public_id,name,email,password_hash,role,created_at) VALUES(1,'ADMPCA-1','Fixture','fixture@example.test','unused','administrador',?)",(datetime.now(timezone.utc).isoformat(),))
+        db.commit();db.close();login(client)
+        test_new_client_official_sequence_then_notice_confirmation_then_pickup((app,client))
+    finally:
+        with psycopg.connect(url,autocommit=True) as root: root.execute('DROP SCHEMA '+schema+' CASCADE')
