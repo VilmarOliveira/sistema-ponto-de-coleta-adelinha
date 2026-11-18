@@ -111,7 +111,7 @@
   const registration=await navigator.serviceWorker.register('/offline/sw.js',{scope:'/offline/'});
   await navigator.serviceWorker.ready;
   if(registration.installing)await new Promise((resolve,reject)=>{const worker=registration.installing;worker.addEventListener('statechange',()=>{if(worker.state==='activated')resolve();if(worker.state==='redundant')reject(new Error('Não foi possível preparar as telas offline.'));});});
-  const cache=await caches.open('adelinha-offline-shell-v3');
+  const cache=await caches.open('adelinha-offline-shell-v4');
   for(const path of ['/static/offline/index.html','/static/offline/offline.css','/static/offline/offline.js','/static/offline/finance.js','/static/offline/qrcode.js'])if(!await cache.match(path))throw new Error('As telas offline não foram preparadas. Tente novamente conectado.');
  }
  function ensureReady(){
@@ -353,6 +353,22 @@
   await prepareWorker();await sessionIdentity();const snapshot=await api('prepare');if(snapshot.scope!==state.scope)throw new Error('Ambiente ou operador diferente.');
   delete snapshot.csrf_token;await mutate(next=>{next.snapshot=snapshot;});say('Base local atualizada. Registros de contingência preservados.');
  }));
+ async function confirmNotice(op){
+  const notice=await api('notice/'+op.event.id);
+  if(notice.confirmed)return true;
+  const dialog=$('sync-notice');$('sync-notice-code').textContent='Pacote '+notice.package_code;
+  $('sync-notice-message').value=notice.message;
+  $('sync-notice-link').hidden=!notice.url;
+  if(notice.url)$('sync-notice-link').href=notice.url;
+  $('sync-notice-confirm').disabled=false;$('sync-notice-later').disabled=false;
+  const sent=await new Promise(resolve=>{
+   const close=value=>{$('sync-notice-confirm').disabled=true;$('sync-notice-later').disabled=true;dialog.close();dialog.oncancel=null;$('sync-notice-confirm').onclick=null;$('sync-notice-later').onclick=null;resolve(value);};
+   $('sync-notice-confirm').onclick=()=>close(true);$('sync-notice-later').onclick=()=>close(false);
+   dialog.oncancel=event=>{event.preventDefault();close(false);};dialog.showModal();
+  });
+  if(sent)await api('notice/'+op.event.id,formData({csrf_token:identity.csrf_token,confirmed:'yes'}));
+  return sent;
+ }
  $('sync').addEventListener('click',()=>task(async()=>{
   await sessionIdentity();
   let total=0;
@@ -365,10 +381,17 @@
   const rank={client:0,package:1,notify:2,pickup:3};
   const pending=state.operations.filter(x=>['review','conflict'].includes(x.state)).sort((a,b)=>(rank[a.event.kind]-rank[b.event.kind])||a.event.created_at.localeCompare(b.event.created_at));
   let imported=0;
-  for(let offset=0;offset<pending.length;offset+=20){
-   const ids=pending.slice(offset,offset+20).map(x=>x.event.id);
-   const result=await api('import',formData({csrf_token:identity.csrf_token,payload:JSON.stringify({scope:state.scope,ids})}));
-   await mutate(next=>{for(const item of result.results){const op=next.operations.find(x=>x.event.id===item.id);if(op){op.state=item.state;op.reason=item.reason;op.linked_id=item.linked_id;if(item.state==='linked')imported++;}}});
+  for(const kind of ['client','package','notify','pickup']){
+   const stage=pending.filter(x=>x.event.kind===kind);
+   for(let offset=0;offset<stage.length;offset+=20){
+    const batch=stage.slice(offset,offset+20);
+    if(kind==='notify')for(const op of batch){
+     try{if(!await confirmNotice(op)){const fresh=await api('prepare');delete fresh.csrf_token;await mutate(next=>{next.snapshot=fresh;});say('Cliente e pacote salvos online. Envie o aviso e sincronize novamente para concluir a retirada.');return;}}
+     catch(error){op.reason=error.message;}
+    }
+    const result=await api('import',formData({csrf_token:identity.csrf_token,payload:JSON.stringify({scope:state.scope,ids:batch.map(x=>x.event.id)})}));
+    await mutate(next=>{for(const item of result.results){const op=next.operations.find(x=>x.event.id===item.id);if(op){op.state=item.state;op.reason=item.reason;op.linked_id=item.linked_id;if(item.state==='linked')imported++;}}});
+   }
   }
   const snapshot=await api('prepare');delete snapshot.csrf_token;await mutate(next=>{next.snapshot=snapshot;});
   const remaining=state.operations.filter(x=>['review','conflict'].includes(x.state)).length;

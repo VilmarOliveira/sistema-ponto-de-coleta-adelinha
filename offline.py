@@ -12,6 +12,7 @@ import plan_service
 import pickup_payments
 from datetime import datetime, timedelta, timezone
 from functools import wraps
+from urllib.parse import urlencode
 from flask import Blueprint, abort, jsonify, request, send_from_directory, session, render_template
 from client_compliance import signature_data
 from database import DatabaseIntegrityError
@@ -31,6 +32,11 @@ def init_schema(db):
     db.execute("CREATE INDEX IF NOT EXISTS idx_offline_operator ON offline_operations(operator_id,received_at)")
     db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_offline_link
         ON offline_operations(linked_type,linked_id) WHERE linked_id IS NOT NULL AND linked_type IN ('package','pickup')""")
+
+    db.execute("""CREATE TABLE IF NOT EXISTS offline_notice_confirmations (
+        operation_id TEXT PRIMARY KEY REFERENCES offline_operations(id),
+        package_id BIGINT NOT NULL REFERENCES packages(id), operator_id BIGINT NOT NULL REFERENCES staff_users(id),
+        confirmed_at TEXT NOT NULL, channel TEXT NOT NULL)""")
 
     for table,definitions in {'packages':{'offline_operation_id':'TEXT'},'pickups':{'payment_note':'TEXT','offline_operation_id':'TEXT','recorded_offline_at':'TEXT'}}.items():
         if db.postgres:
@@ -347,6 +353,31 @@ def install(app, db, login_required, current_staff, now, current_contract):
         form={k:v for k,v in data.items() if k in ('name','cpf','phone','email') or k.startswith('residential_')}
         return render_template('registration.html',registration_form=form)
 
+    @bp.route('/api/notice/<oid>',methods=['GET','POST'])
+    @authorized
+    def notice_request(staff,oid):
+        row=db().execute("SELECT * FROM offline_operations WHERE id=? AND operator_id=? AND kind='notify'",(oid,staff['id'])).fetchone()
+        if not row: abort(404)
+        event=json.loads(row['payload'])
+        try: pid=offline_import.resolve(db(),event['data']['package_ref'],'package',staff['id'])
+        except ValueError as error: return jsonify(error=str(error)),409
+        package=db().execute('SELECT p.*,c.name,c.phone FROM packages p JOIN clients c ON c.id=p.client_id WHERE p.id=?',(pid,)).fetchone()
+        if not package: abort(404)
+        confirmed=db().execute('SELECT operation_id FROM offline_notice_confirmations WHERE operation_id=?',(oid,)).fetchone()
+        if request.method=='POST':
+            if request.form.get('confirmed')!='yes': return jsonify(error='Confirme que o aviso foi enviado ao cliente.'),400
+            db().execute("INSERT INTO offline_notice_confirmations(operation_id,package_id,operator_id,confirmed_at,channel) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING",
+                (oid,pid,staff['id'],now().isoformat(),'manual'))
+            db().commit()
+            return jsonify(confirmed=True)
+        from core import TZ
+        stamp=datetime.fromisoformat(event['created_at'].replace('Z','+00:00')).astimezone(TZ).strftime('%d/%m/%Y %H:%M')
+        message=f"Olá, {package['name']}! Registro do atendimento offline do Ponto de Coleta Adelinha: pacote {package['public_id']}, rastreio {package['tracking']}. Aviso de chegada registrado em {stamp}. Esta mensagem sincroniza o histórico; não reinicia o prazo nem gera nova cobrança. Se a retirada já ocorreu, o comprovante será registrado no sistema."
+        phone=re.sub(r'\D','',package['phone'])
+        if len(phone) in (10,11): phone='55'+phone
+        url='https://wa.me/'+phone+'?'+urlencode({'text':message}) if 10<=len(phone)<=15 else None
+        return jsonify(confirmed=bool(confirmed),message=message,url=url,package_code=package['public_id'])
+
     @bp.post('/api/import')
     @authorized
     def import_operations(staff):
@@ -376,7 +407,7 @@ def install(app, db, login_required, current_staff, now, current_contract):
                 try:
                     if row['reason'].startswith('Outro registro de contingência'):
                         raise ValueError(row['reason'])
-                    kind,target,reason=offline_import.apply(connection,json.loads(row['payload']),staff,now(),package_revision)
+                    kind,target,reason=offline_import.apply(connection,json.loads(row['payload']),staff,now(),package_revision,current_contract())
                     connection.execute("UPDATE offline_operations SET state='linked',linked_type=?,linked_id=?,reviewed_by=?,reviewed_at=?,review_note=?,reason=? WHERE id=?",
                         (kind,target,staff['id'],now().isoformat(),'Importação compatível; pagamento conferido pelo operador.',reason,row['id']))
                     connection.execute("INSERT INTO audit_logs(actor,action,entity_type,entity_id,details,created_at) VALUES(?,?,?,?,?,?)",

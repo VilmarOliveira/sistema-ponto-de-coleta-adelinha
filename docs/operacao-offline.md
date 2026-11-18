@@ -9,8 +9,9 @@ queda; a primeira abertura exige conexão. A preparação vale sete dias.
 
 - Cadastro com nome, CPF, telefone, e-mail, endereço residencial completo,
   leitura do contrato preparado, aceite e assinatura. E-mail e senha do cliente
-  são validados online: registros novos ficam pendentes até essa etapa. O botão
-  Concluir validação do cadastro online abre o formulário com os dados preenchidos.
+  ficam pendentes de regularização online, sem impedir a importação do atendimento.
+  O cliente recebe código oficial ao sincronizar; não é criada senha fictícia nem
+  confirmação de e-mail que não ocorreu. Cadastros antigos incompletos exigem revisão.
   Não há login Google neste módulo, nem senha de cliente salva no PC.
 - Clientes preparados incluem identificação, contato, endereço e dados do plano,
   protegidos no armazenamento local; senhas e tokens não são baixados.
@@ -40,12 +41,18 @@ Clicar Sincronizar agora, conectado e autenticado com o mesmo operador/ambiente.
 O diário é primeiro guardado idempotentemente em offline_operations. Depois o
 servidor incorpora os registros compatíveis às tabelas operacionais:
 
-1. Vincula cliente já validado com mesmo CPF/nome. Novo cliente ou divergência
-   exige conclusão do cadastro online e nova tentativa.
+1. Cria o novo cliente completo usando a sequência oficial CLIPCA no servidor.
+   Preserva o aceite e assinatura locais do contrato vigente, com e-mail e senha
+   pendentes. Mesmo CPF/nome/e-mail vincula ao existente; divergências exigem revisão.
 2. Cria pacote oficial com data original, revalida exigências do cliente e aplica
    os créditos pela mesma função do sistema online. Diferença de cobertura gera
    conflito e desfaz a criação e o consumo daquele registro.
-3. Registra o aviso, preservando a data original e sem reiniciar prazo existente.
+3. Solicita o envio manual do aviso pelo WhatsApp com os códigos oficiais.
+   O atendente pode copiar a mensagem para outro canal e só confirma após enviar.
+   A confirmação é persistida; continuar depois preserva cliente e pacote já criados
+   e deixa a retirada pendente. Retomar não reenvia avisos confirmados. O texto
+   identifica o histórico offline, sem anunciar um novo prazo ou nova cobrança.
+   Registra a data original do aviso e a data real de confirmação do envio separadamente.
 4. Cria retirada, itens e comprovante com assinatura, data original, valores,
    modalidade, observação e responsável. Pagamento fica paid_manual ou zero_total,
    nunca paid_api. Cada pacote tem uma única retirada.

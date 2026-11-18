@@ -1,10 +1,11 @@
 """Apply compatible offline operations using existing prices, reservations and plan rules."""
 import json
+import hashlib
 import re
 from datetime import datetime, timedelta
 from decimal import Decimal
 from core import TZ, calculate_fees, classify_package, pix_payload, valid_cpf
-from client_compliance import signature_data
+from client_compliance import signature_data, valid_email, revision_id
 import client_actions
 import plan_service
 import pickup_payments
@@ -34,26 +35,62 @@ def fees(db,p,at):
     return total
 
 
-def apply(db,event,staff,now,revision):
+def apply(db,event,staff,now,revision,contract=None):
     data=event['data'];kind=event['kind']
     occurred=datetime.fromisoformat(event['created_at'].replace('Z','+00:00')).astimezone(TZ)
     if occurred<now-timedelta(days=8) or occurred>now+timedelta(minutes=10):
         raise ValueError('Data fora da janela automática de oito dias. Confira o registro manualmente.')
     actor=staff['public_id'] or staff['name']
     if kind=='client':
+        from app import next_public_code
+        from branding import BRAND_VERSION, ORIGINAL_LOGO
         cpf=data.get('cpf','')
         if not valid_cpf(cpf):
-            raise ValueError('Confira o CPF e conclua a validação do cadastro online.')
-        row=db.execute('SELECT * FROM clients WHERE cpf=?',(cpf,)).fetchone()
-        if not row or not row['active'] or row['name'].strip().casefold()!=data['name'].strip().casefold():
-            raise ValueError('Cadastro novo ou divergente: conclua a confirmação de e-mail e contrato online, depois sincronize novamente.')
-        return kind,row['id'],'Cliente '+row['public_id']+' vinculado.'
+            raise ValueError('Confira o CPF do cliente.')
+        if db.postgres:
+            db.execute('SELECT pg_advisory_xact_lock(?)',(int(hashlib.sha256(('offline-client:'+cpf).encode()).hexdigest()[:15],16),))
+        row=db.execute("SELECT * FROM clients WHERE REPLACE(REPLACE(REPLACE(cpf,'.',''),'-',''),' ','')=?",(cpf,)).fetchone()
+        if row:
+            if not row['active'] or row['name'].strip().casefold()!=data['name'].strip().casefold() or (row['email'] or '').lower()!=data.get('email','').lower():
+                raise ValueError('CPF já cadastrado com dados divergentes ou inativo. Confira o vínculo existente.')
+            return kind,row['id'],'Cliente '+row['public_id']+' vinculado; cadastro existente preservado.'
+        if data.get('registration_version')!=2 or data.get('terms_accept')!='yes' or not signature_data(data.get('signature','')):
+            raise ValueError('Cadastro antigo ou incompleto: confira endereço, aceite e assinatura antes de importar.')
+        required=('residential_street','residential_number','residential_district','residential_city')
+        if len(data['name'])<5 or len(re.sub(r'\D','',data['phone']))<10 or not data.get('email') or not valid_email(data['email']) or len(re.sub(r'\D','',data.get('residential_cep','')))!=8 or not re.fullmatch('[A-Za-z]{2}',data.get('residential_state','')) or not all(data.get(k) for k in required):
+            raise ValueError('Confira os dados obrigatórios do cadastro offline.')
+        version,label,body=contract
+        digest=hashlib.sha256(body.encode()).hexdigest()
+        if data['contract_version']!=version or data['contract_digest']!=digest:
+            raise ValueError('Contrato mudou. Confira o aceite da versão vigente antes de importar o cliente.')
+        public=next_public_code(db,'CLIPCA')
+        values=dict(public_id=public,name=data['name'],cpf=cpf,phone=re.sub(r'\D','',data['phone']),email=data['email'].lower(),
+            terms_version=version,terms_text=body,signature=data['signature'],accepted_at=occurred.isoformat(),password_hash=None,
+            contract_public_id=public,document_brand_version=BRAND_VERSION,document_logo_present=int(ORIGINAL_LOGO.is_file()),
+            confirmation_channel='offline',confirmation_destination=None,confirmation_validated_at=None,
+            terms_display_label=label,contract_revision_id=revision_id(version,body),
+            contract_hash=hashlib.sha256((public+data['name']+cpf+body+data['signature']+occurred.isoformat()).encode()).hexdigest())
+        values.update({k:v for k,v in data.items() if k.startswith('residential_')})
+        ident=insert(db,'clients',values)
+        db.execute('UPDATE clients SET contract_id=? WHERE id=?',('CTRPCA-'+str(ident),ident))
+        return kind,ident,'Cliente '+public+' criado. Confirmação do e-mail e criação da senha pendentes.'
     if kind=='package':
         client_id=resolve(db,data['client_ref'],'client',staff['id'])
         owner=db.execute('SELECT * FROM clients WHERE id=? AND active=1',(client_id,)).fetchone()
         if not owner:
             raise ValueError('Cliente inativo ou inexistente.')
-        blockers=client_actions.blockers(db,owner,now.isoformat())['new_packages']
+        # Import records already performed offline without claiming that pending
+        # email/password regularization was completed. Explicit unrelated blocks stay.
+        from client_compliance import diagnostics
+        offline_client=db.execute("SELECT id FROM offline_operations WHERE kind='client' AND state='linked' AND linked_id=? AND operator_id=?",(client_id,staff['id'])).fetchone()
+        deferred=bool(offline_client and owner['confirmation_channel']=='offline' and
+            {x['key'] for x in diagnostics(owner)}<={'email_confirmation','password'})
+        blockers=[]
+        for requirement in client_actions.client_items(db,owner,now.isoformat(),commit_assignments=False):
+            if requirement['kind']!='mandatory' or requirement['status']!='published' or 'new_packages' not in requirement['functions']:continue
+            exact_contract=requirement['is_contract'] and requirement['require_existing'] and requirement['document_version']==owner['terms_version'] and requirement['body']==owner['terms_text']
+            validation_only=requirement['criterion']=='email_confirmation' or (requirement['criterion']=='profile' and not requirement['is_contract'])
+            if not (deferred and (exact_contract or validation_only)):blockers.append(requirement['title'])
         if blockers:
             raise ValueError('Cliente precisa regularizar: '+'; '.join(blockers))
         if db.execute('SELECT id FROM packages WHERE UPPER(tracking)=?',(data['tracking'],)).fetchone():
@@ -84,6 +121,8 @@ def apply(db,event,staff,now,revision):
             raise ValueError('Aviso anterior ao recebimento. Confira o relógio e as datas.')
         if data['package_ref'].startswith('srv:') and revision(row)!=data['revision']:
             raise ValueError('Pacote alterado; confira o aviso.')
+        if not db.execute('SELECT operation_id FROM offline_notice_confirmations WHERE operation_id=?',(event['id'],)).fetchone():
+            raise ValueError('Envie o aviso ao cliente e confirme o envio para continuar a sincronização.')
         db.execute("UPDATE packages SET status='aguardando_retirada',notified_at=? WHERE id=?",(occurred.isoformat(),pid))
         return kind,pid,'Aviso de chegada registrado; prazo iniciado na data original.'
     if data['payment_method'] not in ('Pix AI','Dinheiro'):
