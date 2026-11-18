@@ -71,7 +71,7 @@ def response_for(db,request_id,client_id):
     return db.execute('SELECT * FROM client_action_responses WHERE request_id=? AND client_id=? ORDER BY id DESC LIMIT 1',(request_id,client_id)).fetchone()
 
 
-def client_items(db,owner,stamp,include_closed=False):
+def client_items(db,owner,stamp,include_closed=False,commit_assignments=True):
     rows=db.execute("SELECT * FROM client_action_requests WHERE status!='draft' ORDER BY id DESC").fetchall()
     items=[]
     for raw in rows:
@@ -79,7 +79,7 @@ def client_items(db,owner,stamp,include_closed=False):
         assigned=db.execute('SELECT * FROM client_action_assignments WHERE request_id=? AND client_id=?',(req['id'],owner['id'])).fetchone()
         if not assigned and req['status']=='published' and req['starts_at']<=stamp and audience_matches(db,req,owner):
             db.execute('INSERT INTO client_action_assignments(request_id,client_id,assigned_at) VALUES(?,?,?) ON CONFLICT DO NOTHING',(req['id'],owner['id'],stamp))
-            db.commit()
+            if commit_assignments:db.commit()
             assigned=db.execute('SELECT * FROM client_action_assignments WHERE request_id=? AND client_id=?',(req['id'],owner['id'])).fetchone()
         if not assigned:continue
         answer=response_for(db,req['id'],owner['id'])

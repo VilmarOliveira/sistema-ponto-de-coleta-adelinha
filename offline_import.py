@@ -79,7 +79,18 @@ def apply(db,event,staff,now,revision,contract=None):
         owner=db.execute('SELECT * FROM clients WHERE id=? AND active=1',(client_id,)).fetchone()
         if not owner:
             raise ValueError('Cliente inativo ou inexistente.')
-        blockers=client_actions.blockers(db,owner,now.isoformat())['new_packages']
+        # Import records already performed offline without claiming that pending
+        # email/password regularization was completed. Explicit unrelated blocks stay.
+        from client_compliance import diagnostics
+        offline_client=db.execute("SELECT id FROM offline_operations WHERE kind='client' AND state='linked' AND linked_id=? AND operator_id=?",(client_id,staff['id'])).fetchone()
+        deferred=bool(offline_client and owner['confirmation_channel']=='offline' and
+            {x['key'] for x in diagnostics(owner)}<={'email_confirmation','password'})
+        blockers=[]
+        for requirement in client_actions.client_items(db,owner,now.isoformat(),commit_assignments=False):
+            if requirement['kind']!='mandatory' or requirement['status']!='published' or 'new_packages' not in requirement['functions']:continue
+            exact_contract=requirement['is_contract'] and requirement['require_existing'] and requirement['document_version']==owner['terms_version'] and requirement['body']==owner['terms_text']
+            validation_only=requirement['criterion']=='email_confirmation' or (requirement['criterion']=='profile' and not requirement['is_contract'])
+            if not (deferred and (exact_contract or validation_only)):blockers.append(requirement['title'])
         if blockers:
             raise ValueError('Cliente precisa regularizar: '+'; '.join(blockers))
         if db.execute('SELECT id FROM packages WHERE UPPER(tracking)=?',(data['tracking'],)).fetchone():

@@ -204,7 +204,14 @@ def new_client(snapshot,**extra):
 def test_new_client_official_sequence_then_notice_confirmation_then_pickup(setup):
     from client_compliance import diagnostics
     app,client=setup;snapshot=prepare(client)
-    db=DatabaseConnection(app.config['DATABASE']);db.execute("UPDATE id_sequences SET last_value=41 WHERE prefix='CLIPCA'");db.commit();db.close()
+    db=DatabaseConnection(app.config['DATABASE']);db.execute("UPDATE id_sequences SET last_value=41 WHERE prefix='CLIPCA'")
+    from offline_import import insert
+    insert(db,'client_action_requests',dict(family_key='offline-contract-test',version=1,status='published',title='Confirmar contrato',
+        explanation='Fixture',body=snapshot['contract']['body'],kind='mandatory',audience='all',clients_json='[]',criterion=None,
+        actions_json='["terms","signature","email"]',functions_json='["new_packages"]',starts_at='2000-01-01T00:00:00-03:00',due_at=None,
+        is_contract=1,require_existing=1,document_version=snapshot['contract']['version'],document_label=snapshot['contract']['label'],
+        content_hash=snapshot['contract']['digest'],created_at='2000-01-01T00:00:00-03:00',created_by='fixture',published_at='2000-01-01T00:00:00-03:00'))
+    db.commit();db.close()
     owner=new_client(snapshot);package=event('package',client_ref=owner['id'],plan_covered=False)
     notice=event('notify',package_ref=package['id'],revision='')
     pickup=modern_pickup(snapshot,package_refs=[package['id']]);pickup['data']['revisions']={}
